@@ -1,4 +1,24 @@
-import { useState, useEffect } from "react";
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>🧶 Knitting Journal</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #F7F4EE; font-family: 'Georgia', serif; color: #2C2416; }
+  input, textarea, button { font-family: inherit; }
+  input:focus, textarea:focus { outline: 2px solid #2D4A3E; outline-offset: 1px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
@@ -11,325 +31,338 @@ const newSection = (name = "新しい工程") => ({
   done: false,
 });
 
-const newProject = () => ({
-  id: Date.now() + Math.random(),
-  name: "新しいプロジェクト",
-  type: "棒針",
-  memo: "",
-  createdAt: new Date().toLocaleDateString("ja-JP"),
-  sections: [newSection("工程 1")],
-  activeSectionId: null, // set after creation
-});
-
 const initProject = () => {
-  const p = newProject();
-  p.activeSectionId = p.sections[0].id;
-  return p;
+  const s = newSection("工程 1");
+  return {
+    id: Date.now() + Math.random(),
+    name: "新しいプロジェクト",
+    type: "棒針",
+    memo: "",
+    createdAt: new Date().toLocaleDateString("ja-JP"),
+    sections: [s],
+    activeSectionId: s.id,
+  };
 };
 
-// ── Main component ────────────────────────────────────────────────────────────
+const STORE_KEY = "knitting_v2";
+const loadData = () => {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+};
+const saveData = (projects, activeProjectId) => {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ projects, activeProjectId })); } catch {}
+};
 
-export default function KnittingCounter() {
-  const [projects, setProjects] = useState([]);
-  const [activeProjectId, setActiveProjectId] = useState(null);
-  const [view, setView] = useState("counter"); // counter | projects | editProject | editSection
+// ── Palette ───────────────────────────────────────────────────────────────────
+
+const C = {
+  bg: "#F7F4EE", card: "#FDFBF7",
+  green: "#2D4A3E", rose: "#C4837A", rosePale: "#F0D9D6",
+  gold: "#B8924A", goldPale: "#F5EEDD",
+  text: "#2C2416", textMid: "#6B5F4E", textLight: "#9C8E7A",
+  border: "#DDD5C4",
+};
+
+// ── Small components ──────────────────────────────────────────────────────────
+
+const Tag = ({ children }) => (
+  <span style={{ fontSize:11, background:C.goldPale, color:C.gold, border:`1px solid ${C.gold}`, borderRadius:4, padding:"2px 7px", fontFamily:"sans-serif" }}>
+    {children}
+  </span>
+);
+
+const GhostBtn = ({ onClick, children, style = {} }) => (
+  <button onClick={onClick} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.textMid, borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif", ...style }}>
+    {children}
+  </button>
+);
+
+const FieldLabel = ({ children }) => (
+  <label style={{ display:"block", fontSize:11, color:C.gold, letterSpacing:"0.1em", fontFamily:"sans-serif", textTransform:"uppercase", marginBottom:6, marginTop:16 }}>
+    {children}
+  </label>
+);
+
+const ProgressBar = ({ pct }) => (
+  <div style={{ background:C.border, borderRadius:4, height:6, overflow:"hidden" }}>
+    <div style={{ background:`linear-gradient(90deg,${C.green},${C.gold})`, height:"100%", borderRadius:4, width:`${pct}%`, transition:"width 0.3s ease" }} />
+  </div>
+);
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+
+function App() {
+  const [projects, setProjects] = useState(() => {
+    const d = loadData();
+    if (d && d.projects && d.projects.length > 0) return d.projects;
+    const p = initProject(); return [p];
+  });
+  const [activeProjectId, setActiveProjectId] = useState(() => {
+    const d = loadData();
+    if (d && d.activeProjectId) return d.activeProjectId;
+    const d2 = loadData(); // re-read after init
+    return null;
+  });
+  const [view, setView] = useState("counter");
   const [editProjectDraft, setEditProjectDraft] = useState(null);
   const [editSectionDraft, setEditSectionDraft] = useState(null);
   const [tapFeedback, setTapFeedback] = useState(false);
 
-  // Load
+  // Init activeProjectId if null
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await window.storage.get("knitting_v2");
-        if (res) {
-          const data = JSON.parse(res.value);
-          setProjects(data.projects || []);
-          setActiveProjectId(data.activeProjectId || null);
-        } else {
-          const p = initProject();
-          setProjects([p]);
-          setActiveProjectId(p.id);
-        }
-      } catch {
-        const p = initProject();
-        setProjects([p]);
-        setActiveProjectId(p.id);
-      }
-    })();
+    if (!activeProjectId && projects.length > 0) {
+      setActiveProjectId(projects[0].id);
+    }
   }, []);
 
-  const save = (ps, apid) => {
-    window.storage.set("knitting_v2", JSON.stringify({ projects: ps, activeProjectId: apid })).catch(() => {});
-  };
+  // Persist on change
+  useEffect(() => {
+    if (projects.length > 0) saveData(projects, activeProjectId);
+  }, [projects, activeProjectId]);
 
-  // ── Derived ──────────────────────────────────────────────────────────────────
+  const activeProject = projects.find(p => p.id === activeProjectId);
+  const activeSection = activeProject?.sections?.find(s => s.id === activeProject.activeSectionId);
 
-  const activeProject = projects.find((p) => p.id === activeProjectId);
-  const activeSection = activeProject?.sections?.find((s) => s.id === activeProject.activeSectionId);
+  const updateProjects = fn => setProjects(ps => fn(ps));
 
-  // ── Mutators ─────────────────────────────────────────────────────────────────
+  const updateActiveProject = fn =>
+    updateProjects(ps => ps.map(p => p.id === activeProjectId ? fn(p) : p));
 
-  const updateProjects = (fn) => {
-    const next = fn(projects);
-    setProjects(next);
-    save(next, activeProjectId);
-  };
-
-  const updateActiveProject = (fn) => {
-    updateProjects((ps) => ps.map((p) => (p.id === activeProjectId ? fn(p) : p)));
-  };
-
-  const updateActiveSection = (fn) => {
-    updateActiveProject((p) => ({
+  const updateActiveSection = fn =>
+    updateActiveProject(p => ({
       ...p,
-      sections: p.sections.map((s) => (s.id === p.activeSectionId ? fn(s) : s)),
+      sections: p.sections.map(s => s.id === p.activeSectionId ? fn(s) : s)
     }));
-  };
 
   const increment = () => {
-    updateActiveSection((s) => ({ ...s, rows: s.rows + 1 }));
+    updateActiveSection(s => ({ ...s, rows: s.rows + 1 }));
     setTapFeedback(true);
     setTimeout(() => setTapFeedback(false), 150);
   };
 
-  const decrement = () => {
-    updateActiveSection((s) => ({ ...s, rows: Math.max(0, s.rows - 1) }));
-  };
+  const decrement = () => updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows - 1) }));
 
   const resetSection = () => {
-    if (window.confirm("この工程の段数を0にリセットしますか？")) {
-      updateActiveSection((s) => ({ ...s, rows: 0 }));
-    }
+    if (window.confirm("この工程の段数を0にリセットしますか？"))
+      updateActiveSection(s => ({ ...s, rows: 0 }));
   };
 
-  const toggleDone = (sectionId) => {
-    updateActiveProject((p) => ({
+  const toggleDone = id =>
+    updateActiveProject(p => ({
       ...p,
-      sections: p.sections.map((s) => (s.id === sectionId ? { ...s, done: !s.done } : s)),
+      sections: p.sections.map(s => s.id === id ? { ...s, done: !s.done } : s)
     }));
-  };
 
-  const switchSection = (sectionId) => {
-    updateActiveProject((p) => ({ ...p, activeSectionId: sectionId }));
-  };
+  const switchSection = id =>
+    updateActiveProject(p => ({ ...p, activeSectionId: id }));
 
   const addSection = () => {
     const s = newSection(`工程 ${(activeProject?.sections?.length || 0) + 1}`);
-    updateActiveProject((p) => ({
-      ...p,
-      sections: [...p.sections, s],
-      activeSectionId: s.id,
-    }));
+    updateActiveProject(p => ({ ...p, sections: [...p.sections, s], activeSectionId: s.id }));
   };
 
-  const deleteSection = (sectionId) => {
+  const deleteSection = id => {
     if (!window.confirm("この工程を削除しますか？")) return;
-    updateActiveProject((p) => {
-      const next = p.sections.filter((s) => s.id !== sectionId);
-      const newActive = next.length > 0 ? (p.activeSectionId === sectionId ? next[0].id : p.activeSectionId) : null;
+    updateActiveProject(p => {
+      const next = p.sections.filter(s => s.id !== id);
+      if (next.length === 0) { const s = newSection("工程 1"); return { ...p, sections: [s], activeSectionId: s.id }; }
+      const newActive = p.activeSectionId === id ? next[0].id : p.activeSectionId;
       return { ...p, sections: next, activeSectionId: newActive };
     });
   };
 
   const addProject = () => {
     const p = initProject();
-    const next = [...projects, p];
-    setProjects(next);
+    setProjects(ps => [...ps, p]);
     setActiveProjectId(p.id);
-    save(next, p.id);
     setEditProjectDraft({ ...p });
     setView("editProject");
   };
 
-  const deleteProject = (id) => {
+  const deleteProject = id => {
     if (!window.confirm("このプロジェクトを削除しますか？")) return;
-    let next = projects.filter((p) => p.id !== id);
-    let newAid = activeProjectId;
-    if (next.length === 0) { const p = initProject(); next = [p]; newAid = p.id; }
-    else if (id === activeProjectId) newAid = next[next.length - 1].id;
-    setProjects(next);
-    setActiveProjectId(newAid);
-    save(next, newAid);
+    setProjects(ps => {
+      let next = ps.filter(p => p.id !== id);
+      if (next.length === 0) { const p = initProject(); next = [p]; setActiveProjectId(p.id); }
+      else if (id === activeProjectId) setActiveProjectId(next[next.length - 1].id);
+      return next;
+    });
     setView("counter");
   };
 
-  // ── Progress calculation ──────────────────────────────────────────────────────
-
-  const sectionProgress = (s) =>
-    s.targetRows ? Math.min(100, Math.round((s.rows / parseInt(s.targetRows)) * 100)) : null;
-
-  const projectTotalRows = (p) => p.sections.reduce((a, s) => a + s.rows, 0);
-  const projectTotalTarget = (p) => {
-    const targets = p.sections.filter((s) => s.targetRows).map((s) => parseInt(s.targetRows));
-    return targets.length === p.sections.length ? targets.reduce((a, b) => a + b, 0) : null;
+  const sectionPct = s => s.targetRows ? Math.min(100, Math.round(s.rows / parseInt(s.targetRows) * 100)) : null;
+  const projectTotalRows = p => p.sections.reduce((a, s) => a + s.rows, 0);
+  const projectTotalTarget = p => {
+    const ts = p.sections.filter(s => s.targetRows).map(s => parseInt(s.targetRows));
+    return ts.length === p.sections.length ? ts.reduce((a,b)=>a+b,0) : null;
   };
 
-  // ── UI ────────────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={S.root}>
-      <header style={S.header}>
-        <div style={S.logo}>🧶 Knitting Journal</div>
-        <nav style={S.nav}>
-          <NavBtn active={view === "counter"} onClick={() => setView("counter")}>カウンター</NavBtn>
-          <NavBtn active={view === "projects"} onClick={() => setView("projects")}>プロジェクト</NavBtn>
+    <div style={{ minHeight:"100vh", background:C.bg }}>
+
+      {/* Header */}
+      <header style={{ background:C.green, padding:"12px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100 }}>
+        <div style={{ color:"#F5EEDD", fontSize:18, fontWeight:"bold", letterSpacing:"0.03em" }}>🧶 Knitting Journal</div>
+        <nav style={{ display:"flex", gap:8 }}>
+          {[["counter","カウンター"],["projects","プロジェクト"]].map(([v,label]) => (
+            <button key={v} onClick={() => setView(v)} style={{
+              background: view===v ? C.gold : "transparent",
+              border: view===v ? `1px solid ${C.gold}` : "1px solid rgba(245,238,221,0.3)",
+              color: view===v ? C.green : "rgba(245,238,221,0.7)",
+              borderRadius:20, padding:"5px 14px", fontSize:13,
+              fontWeight: view===v ? "bold" : "normal",
+              cursor:"pointer", fontFamily:"sans-serif"
+            }}>{label}</button>
+          ))}
         </nav>
       </header>
 
-      <main style={S.main}>
+      <main style={{ maxWidth:480, margin:"0 auto", padding:"16px 14px 60px" }}>
 
-        {/* ── COUNTER VIEW ── */}
-        {view === "counter" && activeProject && (
-          <div>
-            {/* Project header */}
-            <div style={S.card}>
-              <div style={S.projectHeader}>
-                <Tag>{activeProject.type}</Tag>
-                <span style={S.projectName}>{activeProject.name}</span>
-                <GhostBtn onClick={() => { setEditProjectDraft({ ...activeProject }); setView("editProject"); }}>編集</GhostBtn>
+        {/* ── COUNTER ── */}
+        {view === "counter" && activeProject && (<>
+
+          {/* Project card */}
+          <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px", marginBottom:12, boxShadow:"0 2px 12px rgba(45,74,62,0.06)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+              <Tag>{activeProject.type}</Tag>
+              <span style={{ flex:1, fontSize:16, fontWeight:"bold", color:C.green }}>{activeProject.name}</span>
+              <GhostBtn onClick={() => { setEditProjectDraft({...activeProject}); setView("editProject"); }}>編集</GhostBtn>
+            </div>
+            {/* Overall stats */}
+            {(() => {
+              const total = projectTotalRows(activeProject);
+              const target = projectTotalTarget(activeProject);
+              const pct = target ? Math.min(100, Math.round(total/target*100)) : null;
+              const done = activeProject.sections.filter(s=>s.done).length;
+              return (
+                <div>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:6, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:15, fontWeight:"bold" }}>合計 {total}段</span>
+                    {target && <span style={{ fontSize:13, color:C.gold, fontFamily:"sans-serif" }}>{pct}%</span>}
+                    <span style={{ fontSize:12, color:C.textLight, fontFamily:"sans-serif", marginLeft:"auto" }}>{done}/{activeProject.sections.length} 工程完了</span>
+                  </div>
+                  {target && <ProgressBar pct={pct} />}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Section tabs */}
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
+            {activeProject.sections.map(s => (
+              <button key={s.id} onClick={() => switchSection(s.id)} style={{
+                background: s.id===activeProject.activeSectionId ? C.green : C.card,
+                border: s.id===activeProject.activeSectionId ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                color: s.id===activeProject.activeSectionId ? "#F5EEDD" : C.textMid,
+                borderRadius:20, padding:"6px 14px", fontSize:13, cursor:"pointer",
+                fontFamily:"sans-serif", fontWeight: s.id===activeProject.activeSectionId ? "bold" : "normal",
+                opacity: s.done ? 0.5 : 1,
+                textDecoration: s.done ? "line-through" : "none",
+              }}>
+                {s.done ? "✓ " : ""}{s.name}
+              </button>
+            ))}
+            <button onClick={addSection} style={{ background:"transparent", border:`1px dashed ${C.border}`, color:C.textLight, borderRadius:20, padding:"6px 12px", fontSize:16, cursor:"pointer" }}>＋</button>
+          </div>
+
+          {/* Active section */}
+          {activeSection && (
+            <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px", boxShadow:"0 2px 12px rgba(45,74,62,0.06)" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4, flexWrap:"wrap" }}>
+                <span style={{ fontSize:17, fontWeight:"bold", color:C.green, flex:1 }}>{activeSection.name}</span>
+                <GhostBtn onClick={() => { setEditSectionDraft({...activeSection}); setView("editSection"); }}>編集</GhostBtn>
+                <button onClick={() => toggleDone(activeSection.id)} style={{
+                  background: activeSection.done ? C.green : "transparent",
+                  border: activeSection.done ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                  color: activeSection.done ? "#F5EEDD" : C.textLight,
+                  borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif"
+                }}>{activeSection.done ? "✓ 完了" : "完了にする"}</button>
               </div>
 
-              {/* Overall progress */}
-              {(() => {
-                const total = projectTotalRows(activeProject);
-                const target = projectTotalTarget(activeProject);
-                const pct = target ? Math.min(100, Math.round((total / target) * 100)) : null;
-                const done = activeProject.sections.filter((s) => s.done).length;
-                return (
-                  <div style={S.overallProgress}>
-                    <div style={S.overallStats}>
-                      <span style={S.overallTotal}>合計 {total}段</span>
-                      {target && <span style={S.overallPct}>{pct}%</span>}
-                      <span style={S.overallDone}>{done}/{activeProject.sections.length} 工程完了</span>
-                    </div>
-                    {target && (
-                      <div style={S.progressBar}>
-                        <div style={{ ...S.progressFill, width: `${pct}%` }} />
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Section tabs */}
-            <div style={S.sectionTabs}>
-              {activeProject.sections.map((s) => (
-                <button
-                  key={s.id}
-                  style={{ ...S.sectionTab, ...(s.id === activeProject.activeSectionId ? S.sectionTabActive : {}), ...(s.done ? S.sectionTabDone : {}) }}
-                  onClick={() => switchSection(s.id)}
-                >
-                  {s.done ? "✓ " : ""}{s.name}
-                </button>
-              ))}
-              <button style={S.sectionTabAdd} onClick={addSection}>＋</button>
-            </div>
-
-            {/* Active section counter */}
-            {activeSection && (
-              <div style={S.card}>
-                <div style={S.sectionTitleRow}>
-                  <span style={S.sectionTitle}>{activeSection.name}</span>
-                  <div style={S.sectionTitleActions}>
-                    <GhostBtn onClick={() => { setEditSectionDraft({ ...activeSection }); setView("editSection"); }}>編集</GhostBtn>
-                    <button
-                      style={{ ...S.doneToggle, ...(activeSection.done ? S.doneToggleOn : {}) }}
-                      onClick={() => toggleDone(activeSection.id)}
-                    >
-                      {activeSection.done ? "✓ 完了" : "完了にする"}
-                    </button>
-                  </div>
+              <div style={{ textAlign:"center", padding:"20px 0 16px" }}>
+                <div style={{ fontSize:92, fontWeight:"bold", color: tapFeedback ? C.rose : C.green, lineHeight:1, transition:"color 0.1s, transform 0.1s", transform: tapFeedback ? "scale(1.06)" : "scale(1)" }}>
+                  {activeSection.rows}
                 </div>
-
-                <div style={S.counterArea}>
-                  <div style={{ ...S.rowNumber, ...(tapFeedback ? S.rowNumberPop : {}) }}>
-                    {activeSection.rows}
-                  </div>
-                  <div style={S.rowLabel}>段目</div>
-
-                  {sectionProgress(activeSection) !== null && (
-                    <div style={S.progressWrap}>
-                      <div style={S.progressBar}>
-                        <div style={{ ...S.progressFill, width: `${sectionProgress(activeSection)}%` }} />
-                      </div>
-                      <div style={S.progressText}>{sectionProgress(activeSection)}% / 目標 {activeSection.targetRows}段</div>
-                    </div>
-                  )}
-                </div>
-
-                <div style={S.btnRow}>
-                  <button style={S.decrementBtn} onClick={decrement}>−</button>
-                  <button style={S.incrementBtn} onClick={increment}>＋ 1段</button>
-                </div>
-                <button style={S.resetBtn} onClick={resetSection}>リセット</button>
-
-                {activeSection.memo && (
-                  <div style={S.memoBox}>
-                    <div style={S.memoLabel}>メモ</div>
-                    <div style={S.memoText}>{activeSection.memo}</div>
+                <div style={{ fontSize:18, color:C.textMid, marginTop:4, letterSpacing:"0.1em" }}>段目</div>
+                {sectionPct(activeSection) !== null && (
+                  <div style={{ marginTop:12 }}>
+                    <ProgressBar pct={sectionPct(activeSection)} />
+                    <div style={{ fontSize:12, color:C.textLight, marginTop:5, fontFamily:"sans-serif" }}>{sectionPct(activeSection)}% / 目標 {activeSection.targetRows}段</div>
                   </div>
                 )}
-
-                <button style={S.deleteSectionBtn} onClick={() => deleteSection(activeSection.id)}>この工程を削除</button>
               </div>
-            )}
 
-            {/* Project switch */}
-            {projects.length > 1 && (
-              <div style={S.quickSwitch}>
-                <div style={S.quickSwitchLabel}>プロジェクトを切り替え</div>
-                <div style={S.quickSwitchRow}>
-                  {projects.map((p) => (
-                    <button
-                      key={p.id}
-                      style={p.id === activeProjectId ? S.switchBtnActive : S.switchBtn}
-                      onClick={() => { setActiveProjectId(p.id); save(projects, p.id); }}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
+              <div style={{ display:"flex", gap:12, marginBottom:10 }}>
+                <button onClick={decrement} style={{ flex:1, background:C.rosePale, color:C.rose, border:`1px solid ${C.rose}`, borderRadius:10, padding:"22px 0", fontSize:26, cursor:"pointer" }}>−</button>
+                <button onClick={increment} style={{ flex:3, background:C.green, color:"#F5EEDD", border:"none", borderRadius:10, padding:"22px 0", fontSize:22, fontWeight:"bold", cursor:"pointer", boxShadow:"0 4px 12px rgba(45,74,62,0.25)" }}>＋ 1段</button>
+              </div>
+              <button onClick={resetSection} style={{ width:"100%", background:"transparent", border:`1px solid ${C.border}`, color:C.textLight, borderRadius:8, padding:9, fontSize:13, cursor:"pointer", fontFamily:"sans-serif", marginBottom:12 }}>リセット</button>
+
+              {activeSection.memo && (
+                <div style={{ background:C.goldPale, borderRadius:8, padding:"12px 14px", borderLeft:`3px solid ${C.gold}`, marginTop:8 }}>
+                  <div style={{ fontSize:10, color:C.gold, fontFamily:"sans-serif", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:4 }}>メモ</div>
+                  <div style={{ fontSize:14, color:C.textMid, lineHeight:1.6, whiteSpace:"pre-wrap" }}>{activeSection.memo}</div>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
+              )}
 
-        {/* ── PROJECTS VIEW ── */}
+              <button onClick={() => deleteSection(activeSection.id)} style={{ marginTop:14, background:"transparent", border:"none", color:C.rose, fontSize:12, cursor:"pointer", fontFamily:"sans-serif", textDecoration:"underline" }}>この工程を削除</button>
+            </div>
+          )}
+
+          {/* Quick project switch */}
+          {projects.length > 1 && (
+            <div style={{ marginTop:16, borderTop:`1px solid ${C.border}`, paddingTop:14 }}>
+              <div style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif", marginBottom:8 }}>プロジェクトを切り替え</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                {projects.map(p => (
+                  <button key={p.id} onClick={() => { setActiveProjectId(p.id); }} style={{
+                    background: p.id===activeProjectId ? C.green : "white",
+                    border: p.id===activeProjectId ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                    color: p.id===activeProjectId ? "#F5EEDD" : C.textMid,
+                    borderRadius:20, padding:"5px 14px", fontSize:13, cursor:"pointer", fontFamily:"sans-serif"
+                  }}>{p.name}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>)}
+
+        {/* ── PROJECTS ── */}
         {view === "projects" && (
           <div>
-            <div style={S.projectsHeader}>
-              <h2 style={S.pageTitle}>プロジェクト</h2>
-              <AddBtn onClick={addProject}>＋ 新規</AddBtn>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+              <h2 style={{ fontSize:20, color:C.green }}>プロジェクト</h2>
+              <button onClick={addProject} style={{ background:C.green, color:"#F5EEDD", border:"none", borderRadius:8, padding:"8px 16px", fontSize:14, cursor:"pointer", fontFamily:"sans-serif" }}>＋ 新規</button>
             </div>
-            {projects.map((p) => {
+            {projects.map(p => {
               const total = projectTotalRows(p);
               const target = projectTotalTarget(p);
-              const pct = target ? Math.min(100, Math.round((total / target) * 100)) : null;
-              const done = p.sections.filter((s) => s.done).length;
+              const pct = target ? Math.min(100, Math.round(total/target*100)) : null;
+              const done = p.sections.filter(s=>s.done).length;
               return (
-                <div key={p.id} style={{ ...S.projectCard, ...(p.id === activeProjectId ? S.projectCardActive : {}) }}>
-                  <div style={S.projectCardTop}>
+                <div key={p.id} style={{ background:C.card, border:`1px solid ${p.id===activeProjectId ? C.green : C.border}`, borderRadius:10, padding:"14px 16px", marginBottom:10, boxShadow: p.id===activeProjectId ? `0 0 0 2px ${C.green}22` : "none" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
                     <Tag>{p.type}</Tag>
-                    <span style={S.projectCardName}>{p.name}</span>
-                    <span style={S.projectCardDate}>{p.createdAt}</span>
+                    <span style={{ flex:1, fontSize:15, fontWeight:"bold", color:C.green }}>{p.name}</span>
+                    <span style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif" }}>{p.createdAt}</span>
                   </div>
-                  <div style={S.projectCardMeta}>
-                    <span style={S.projectCardRows}>{total}段</span>
-                    {target && <span style={S.projectCardTarget}>/ {target}段 ({pct}%)</span>}
-                    <span style={S.projectCardSections}>{done}/{p.sections.length}工程</span>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:6, marginBottom:4 }}>
+                    <span style={{ fontSize:24, fontWeight:"bold" }}>{total}段</span>
+                    {target && <span style={{ fontSize:13, color:C.textMid, fontFamily:"sans-serif" }}>/ {target}段 ({pct}%)</span>}
+                    <span style={{ fontSize:12, color:C.textLight, fontFamily:"sans-serif", marginLeft:"auto" }}>{done}/{p.sections.length}工程</span>
                   </div>
-                  {target && (
-                    <div style={{ ...S.progressBar, margin: "8px 0" }}>
-                      <div style={{ ...S.progressFill, width: `${pct}%` }} />
-                    </div>
-                  )}
-                  <div style={S.projectCardActions}>
-                    <button style={S.selectBtn} onClick={() => { setActiveProjectId(p.id); save(projects, p.id); setView("counter"); }}>
-                      {p.id === activeProjectId ? "✓ 選択中" : "選択"}
+                  {target && <div style={{ margin:"8px 0" }}><ProgressBar pct={pct} /></div>}
+                  <div style={{ display:"flex", gap:8, marginTop:10 }}>
+                    <button onClick={() => { setActiveProjectId(p.id); setView("counter"); }} style={{ flex:1, background:C.green, color:"#F5EEDD", border:"none", borderRadius:6, padding:"7px 0", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>
+                      {p.id===activeProjectId ? "✓ 選択中" : "選択"}
                     </button>
-                    <button style={S.deleteBtn} onClick={() => deleteProject(p.id)}>削除</button>
+                    <button onClick={() => deleteProject(p.id)} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.rose, borderRadius:6, padding:"7px 14px", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>削除</button>
                   </div>
                 </div>
               );
@@ -337,69 +370,75 @@ export default function KnittingCounter() {
           </div>
         )}
 
-        {/* ── EDIT PROJECT VIEW ── */}
+        {/* ── EDIT PROJECT ── */}
         {view === "editProject" && editProjectDraft && (
-          <div style={S.card}>
-            <h2 style={S.pageTitle}>プロジェクトを編集</h2>
+          <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px" }}>
+            <h2 style={{ fontSize:20, color:C.green, marginBottom:4 }}>プロジェクトを編集</h2>
 
             <FieldLabel>プロジェクト名</FieldLabel>
-            <input style={S.input} value={editProjectDraft.name}
-              onChange={(e) => setEditProjectDraft({ ...editProjectDraft, name: e.target.value })} />
+            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
+              value={editProjectDraft.name}
+              onChange={e => setEditProjectDraft({...editProjectDraft, name:e.target.value})} />
 
             <FieldLabel>種類</FieldLabel>
-            <div style={S.typeRow}>
-              {["棒針", "かぎ針", "その他"].map((t) => (
-                <button key={t}
-                  style={editProjectDraft.type === t ? S.typeBtnActive : S.typeBtn}
-                  onClick={() => setEditProjectDraft({ ...editProjectDraft, type: t })}>
-                  {t}
-                </button>
+            <div style={{ display:"flex", gap:8, marginTop:2 }}>
+              {["棒針","かぎ針","その他"].map(t => (
+                <button key={t} onClick={() => setEditProjectDraft({...editProjectDraft, type:t})} style={{
+                  flex:1, background: editProjectDraft.type===t ? C.green : C.bg,
+                  border: editProjectDraft.type===t ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                  color: editProjectDraft.type===t ? "#F5EEDD" : C.textMid,
+                  borderRadius:8, padding:"9px 0", fontSize:14, cursor:"pointer", fontFamily:"sans-serif"
+                }}>{t}</button>
               ))}
             </div>
 
             <FieldLabel>メモ</FieldLabel>
-            <textarea style={S.textarea} value={editProjectDraft.memo}
+            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }}
               placeholder="使用糸、針のサイズなど"
-              onChange={(e) => setEditProjectDraft({ ...editProjectDraft, memo: e.target.value })} />
+              value={editProjectDraft.memo}
+              onChange={e => setEditProjectDraft({...editProjectDraft, memo:e.target.value})} />
 
-            <div style={S.editActions}>
-              <GhostBtn onClick={() => setView("counter")}>キャンセル</GhostBtn>
-              <button style={S.saveBtn} onClick={() => {
-                updateProjects((ps) => ps.map((p) => (p.id === editProjectDraft.id ? { ...p, ...editProjectDraft } : p)));
+            <div style={{ display:"flex", gap:10, marginTop:24 }}>
+              <GhostBtn onClick={() => setView("counter")} style={{ flex:1, padding:"12px 0", fontSize:15 }}>キャンセル</GhostBtn>
+              <button onClick={() => {
+                updateProjects(ps => ps.map(p => p.id===editProjectDraft.id ? {...p, ...editProjectDraft} : p));
                 setView("counter");
-              }}>保存</button>
+              }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
             </div>
           </div>
         )}
 
-        {/* ── EDIT SECTION VIEW ── */}
+        {/* ── EDIT SECTION ── */}
         {view === "editSection" && editSectionDraft && (
-          <div style={S.card}>
-            <h2 style={S.pageTitle}>工程を編集</h2>
+          <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px" }}>
+            <h2 style={{ fontSize:20, color:C.green, marginBottom:4 }}>工程を編集</h2>
 
             <FieldLabel>工程名</FieldLabel>
-            <input style={S.input} value={editSectionDraft.name}
-              onChange={(e) => setEditSectionDraft({ ...editSectionDraft, name: e.target.value })} />
+            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
+              value={editSectionDraft.name}
+              onChange={e => setEditSectionDraft({...editSectionDraft, name:e.target.value})} />
 
             <FieldLabel>目標段数（省略可）</FieldLabel>
-            <input style={S.input} type="number" value={editSectionDraft.targetRows}
+            <input type="number" style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
               placeholder="例: 40"
-              onChange={(e) => setEditSectionDraft({ ...editSectionDraft, targetRows: e.target.value })} />
+              value={editSectionDraft.targetRows}
+              onChange={e => setEditSectionDraft({...editSectionDraft, targetRows:e.target.value})} />
 
             <FieldLabel>メモ</FieldLabel>
-            <textarea style={S.textarea} value={editSectionDraft.memo}
+            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }}
               placeholder="この工程のメモ・パターンなど"
-              onChange={(e) => setEditSectionDraft({ ...editSectionDraft, memo: e.target.value })} />
+              value={editSectionDraft.memo}
+              onChange={e => setEditSectionDraft({...editSectionDraft, memo:e.target.value})} />
 
-            <div style={S.editActions}>
-              <GhostBtn onClick={() => setView("counter")}>キャンセル</GhostBtn>
-              <button style={S.saveBtn} onClick={() => {
-                updateActiveProject((p) => ({
+            <div style={{ display:"flex", gap:10, marginTop:24 }}>
+              <GhostBtn onClick={() => setView("counter")} style={{ flex:1, padding:"12px 0", fontSize:15 }}>キャンセル</GhostBtn>
+              <button onClick={() => {
+                updateActiveProject(p => ({
                   ...p,
-                  sections: p.sections.map((s) => (s.id === editSectionDraft.id ? { ...s, ...editSectionDraft } : s)),
+                  sections: p.sections.map(s => s.id===editSectionDraft.id ? {...s, ...editSectionDraft} : s)
                 }));
                 setView("counter");
-              }}>保存</button>
+              }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
             </div>
           </div>
         )}
@@ -409,111 +448,7 @@ export default function KnittingCounter() {
   );
 }
 
-// ── Small components ──────────────────────────────────────────────────────────
-
-const C = {
-  bg: "#F7F4EE", card: "#FDFBF7",
-  green: "#2D4A3E", greenLight: "#3D6455",
-  rose: "#C4837A", rosePale: "#F0D9D6",
-  gold: "#B8924A", goldPale: "#F5EEDD",
-  text: "#2C2416", textMid: "#6B5F4E", textLight: "#9C8E7A",
-  border: "#DDD5C4",
-};
-
-const NavBtn = ({ active, onClick, children }) => (
-  <button style={active ? S.navBtnActive : S.navBtn} onClick={onClick}>{children}</button>
-);
-const Tag = ({ children }) => <span style={S.tag}>{children}</span>;
-const GhostBtn = ({ onClick, children }) => <button style={S.ghostBtn} onClick={onClick}>{children}</button>;
-const AddBtn = ({ onClick, children }) => <button style={S.addBtn} onClick={onClick}>{children}</button>;
-const FieldLabel = ({ children }) => <label style={S.fieldLabel}>{children}</label>;
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-const S = {
-  root: { fontFamily: "'Georgia','Noto Serif JP',serif", background: C.bg, minHeight: "100vh", color: C.text },
-  header: { background: C.green, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" },
-  logo: { color: "#F5EEDD", fontSize: "18px", letterSpacing: "0.03em", fontWeight: "bold" },
-  nav: { display: "flex", gap: "8px" },
-  navBtn: { background: "transparent", border: "1px solid rgba(245,238,221,0.3)", color: "rgba(245,238,221,0.7)", borderRadius: "20px", padding: "5px 14px", fontSize: "13px", cursor: "pointer", fontFamily: "sans-serif" },
-  navBtnActive: { background: C.gold, border: `1px solid ${C.gold}`, color: C.green, borderRadius: "20px", padding: "5px 14px", fontSize: "13px", fontWeight: "bold", cursor: "pointer", fontFamily: "sans-serif" },
-  main: { maxWidth: "480px", margin: "0 auto", padding: "16px 14px 48px" },
-
-  card: { background: C.card, borderRadius: "12px", border: `1px solid ${C.border}`, padding: "18px 16px", boxShadow: "0 2px 12px rgba(45,74,62,0.06)", marginBottom: "12px" },
-  tag: { fontSize: "11px", background: C.goldPale, color: C.gold, border: `1px solid ${C.gold}`, borderRadius: "4px", padding: "2px 7px", fontFamily: "sans-serif" },
-  ghostBtn: { background: "transparent", border: `1px solid ${C.border}`, color: C.textMid, borderRadius: "6px", padding: "4px 10px", fontSize: "12px", cursor: "pointer", fontFamily: "sans-serif" },
-  addBtn: { background: C.green, color: "#F5EEDD", border: "none", borderRadius: "8px", padding: "8px 16px", fontSize: "14px", cursor: "pointer", fontFamily: "sans-serif" },
-
-  projectHeader: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" },
-  projectName: { flex: 1, fontSize: "16px", fontWeight: "bold", color: C.green },
-
-  overallProgress: { marginTop: "4px" },
-  overallStats: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px", flexWrap: "wrap" },
-  overallTotal: { fontSize: "15px", fontWeight: "bold", color: C.text },
-  overallPct: { fontSize: "13px", color: C.gold, fontFamily: "sans-serif" },
-  overallDone: { fontSize: "12px", color: C.textLight, fontFamily: "sans-serif", marginLeft: "auto" },
-
-  progressBar: { background: C.border, borderRadius: "4px", height: "6px", overflow: "hidden" },
-  progressFill: { background: `linear-gradient(90deg, ${C.green}, ${C.gold})`, height: "100%", borderRadius: "4px", transition: "width 0.3s ease" },
-  progressWrap: { marginTop: "12px" },
-  progressText: { fontSize: "12px", color: C.textLight, marginTop: "5px", fontFamily: "sans-serif" },
-
-  // Section tabs
-  sectionTabs: { display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px" },
-  sectionTab: { background: C.card, border: `1px solid ${C.border}`, color: C.textMid, borderRadius: "20px", padding: "6px 14px", fontSize: "13px", cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.15s" },
-  sectionTabActive: { background: C.green, border: `1px solid ${C.green}`, color: "#F5EEDD", fontWeight: "bold" },
-  sectionTabDone: { opacity: 0.55, textDecoration: "line-through" },
-  sectionTabAdd: { background: "transparent", border: `1px dashed ${C.border}`, color: C.textLight, borderRadius: "20px", padding: "6px 12px", fontSize: "16px", cursor: "pointer" },
-
-  sectionTitleRow: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px", flexWrap: "wrap" },
-  sectionTitle: { fontSize: "17px", fontWeight: "bold", color: C.green, flex: 1 },
-  sectionTitleActions: { display: "flex", gap: "6px", alignItems: "center" },
-  doneToggle: { background: "transparent", border: `1px solid ${C.border}`, color: C.textLight, borderRadius: "6px", padding: "4px 10px", fontSize: "12px", cursor: "pointer", fontFamily: "sans-serif" },
-  doneToggleOn: { background: C.green, border: `1px solid ${C.green}`, color: "#F5EEDD" },
-
-  counterArea: { textAlign: "center", padding: "20px 0 16px" },
-  rowNumber: { fontSize: "92px", fontWeight: "bold", color: C.green, lineHeight: 1, transition: "transform 0.1s ease, color 0.1s ease" },
-  rowNumberPop: { color: C.rose, transform: "scale(1.06)" },
-  rowLabel: { fontSize: "18px", color: C.textMid, marginTop: "4px", letterSpacing: "0.1em" },
-
-  btnRow: { display: "flex", gap: "12px", marginBottom: "10px" },
-  incrementBtn: { flex: 3, background: C.green, color: "#F5EEDD", border: "none", borderRadius: "10px", padding: "22px 0", fontSize: "22px", fontFamily: "Georgia,serif", fontWeight: "bold", cursor: "pointer", boxShadow: "0 4px 12px rgba(45,74,62,0.25)" },
-  decrementBtn: { flex: 1, background: C.rosePale, color: C.rose, border: `1px solid ${C.rose}`, borderRadius: "10px", padding: "22px 0", fontSize: "26px", cursor: "pointer" },
-  resetBtn: { width: "100%", background: "transparent", border: `1px solid ${C.border}`, color: C.textLight, borderRadius: "8px", padding: "9px", fontSize: "13px", cursor: "pointer", fontFamily: "sans-serif", marginBottom: "12px" },
-
-  memoBox: { background: C.goldPale, borderRadius: "8px", padding: "12px 14px", marginTop: "8px", borderLeft: `3px solid ${C.gold}` },
-  memoLabel: { fontSize: "10px", color: C.gold, fontFamily: "sans-serif", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "4px" },
-  memoText: { fontSize: "14px", color: C.textMid, lineHeight: 1.6, whiteSpace: "pre-wrap" },
-
-  deleteSectionBtn: { marginTop: "14px", background: "transparent", border: "none", color: C.rose, fontSize: "12px", cursor: "pointer", fontFamily: "sans-serif", padding: 0, textDecoration: "underline" },
-
-  quickSwitch: { marginTop: "8px", borderTop: `1px solid ${C.border}`, paddingTop: "14px" },
-  quickSwitchLabel: { fontSize: "11px", color: C.textLight, fontFamily: "sans-serif", marginBottom: "8px" },
-  quickSwitchRow: { display: "flex", flexWrap: "wrap", gap: "8px" },
-  switchBtn: { background: "white", border: `1px solid ${C.border}`, color: C.textMid, borderRadius: "20px", padding: "5px 14px", fontSize: "13px", cursor: "pointer", fontFamily: "sans-serif" },
-  switchBtnActive: { background: C.green, border: `1px solid ${C.green}`, color: "#F5EEDD", borderRadius: "20px", padding: "5px 14px", fontSize: "13px", fontFamily: "sans-serif", cursor: "default" },
-
-  projectsHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" },
-  pageTitle: { fontSize: "20px", color: C.green, margin: 0 },
-  projectCard: { background: C.card, border: `1px solid ${C.border}`, borderRadius: "10px", padding: "14px 16px", marginBottom: "10px" },
-  projectCardActive: { borderColor: C.green, boxShadow: `0 0 0 2px ${C.green}22` },
-  projectCardTop: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" },
-  projectCardName: { flex: 1, fontSize: "15px", fontWeight: "bold", color: C.green },
-  projectCardDate: { fontSize: "11px", color: C.textLight, fontFamily: "sans-serif" },
-  projectCardMeta: { display: "flex", alignItems: "baseline", gap: "6px", marginBottom: "2px" },
-  projectCardRows: { fontSize: "24px", fontWeight: "bold", color: C.text },
-  projectCardTarget: { fontSize: "13px", color: C.textMid, fontFamily: "sans-serif" },
-  projectCardSections: { fontSize: "12px", color: C.textLight, fontFamily: "sans-serif", marginLeft: "auto" },
-  projectCardActions: { display: "flex", gap: "8px", marginTop: "10px" },
-  selectBtn: { flex: 1, background: C.green, color: "#F5EEDD", border: "none", borderRadius: "6px", padding: "7px 0", fontSize: "13px", cursor: "pointer", fontFamily: "sans-serif" },
-  deleteBtn: { background: "transparent", border: `1px solid ${C.border}`, color: C.rose, borderRadius: "6px", padding: "7px 14px", fontSize: "13px", cursor: "pointer", fontFamily: "sans-serif" },
-
-  fieldLabel: { display: "block", fontSize: "11px", color: C.gold, letterSpacing: "0.1em", fontFamily: "sans-serif", textTransform: "uppercase", marginBottom: "6px", marginTop: "16px" },
-  input: { width: "100%", background: C.bg, border: `1px solid ${C.border}`, borderRadius: "8px", padding: "10px 12px", fontSize: "15px", color: C.text, fontFamily: "Georgia,serif", boxSizing: "border-box", outline: "none" },
-  textarea: { width: "100%", background: C.bg, border: `1px solid ${C.border}`, borderRadius: "8px", padding: "10px 12px", fontSize: "14px", color: C.text, fontFamily: "Georgia,serif", boxSizing: "border-box", minHeight: "90px", resize: "vertical", outline: "none" },
-  typeRow: { display: "flex", gap: "8px", marginTop: "2px" },
-  typeBtn: { flex: 1, background: C.bg, border: `1px solid ${C.border}`, color: C.textMid, borderRadius: "8px", padding: "9px 0", fontSize: "14px", cursor: "pointer", fontFamily: "sans-serif" },
-  typeBtnActive: { flex: 1, background: C.green, border: `1px solid ${C.green}`, color: "#F5EEDD", borderRadius: "8px", padding: "9px 0", fontSize: "14px", cursor: "pointer", fontFamily: "sans-serif" },
-  editActions: { display: "flex", gap: "10px", marginTop: "24px" },
-  saveBtn: { flex: 2, background: C.green, border: "none", color: "#F5EEDD", borderRadius: "8px", padding: "12px 0", fontSize: "15px", fontWeight: "bold", cursor: "pointer", fontFamily: "sans-serif" },
-};
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
