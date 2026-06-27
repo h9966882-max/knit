@@ -164,6 +164,26 @@ function App() {
     updateActiveProject(p => ({ ...p, sections: [...p.sections, s], activeSectionId: s.id }));
   };
 
+  const moveSectionUp = id => {
+    updateActiveProject(p => {
+      const idx = p.sections.findIndex(s => s.id === id);
+      if (idx <= 0) return p;
+      const next = [...p.sections];
+      [next[idx-1], next[idx]] = [next[idx], next[idx-1]];
+      return { ...p, sections: next };
+    });
+  };
+
+  const moveSectionDown = id => {
+    updateActiveProject(p => {
+      const idx = p.sections.findIndex(s => s.id === id);
+      if (idx < 0 || idx >= p.sections.length - 1) return p;
+      const next = [...p.sections];
+      [next[idx], next[idx+1]] = [next[idx+1], next[idx]];
+      return { ...p, sections: next };
+    });
+  };
+
   const deleteSection = id => {
     if (!window.confirm("この工程を削除しますか？")) return;
     updateActiveProject(p => {
