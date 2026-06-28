@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>🧶 Knitting Journal</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="編み物">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<meta name="theme-color" content="#2D4A3E">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #F7F4EE; font-family: 'Georgia', serif; color: #2C2416; }
+  input, textarea, button { font-family: inherit; }
+  input:focus, textarea:focus { outline: 2px solid #2D4A3E; outline-offset: 1px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// ── Data helpers ──────────────────────────────────────────────────────────────
+
+const newSection = (name = "新しい工程") => ({
+  id: Date.now() + Math.random(),
+  name,
+  rows: 0,
+  targetRows: "",
+  memo: "",
+  done: false,
+});
+
+const initProject = () => {
+  const s = newSection("工程 1");
+  return {
+    id: Date.now() + Math.random(),
+    name: "新しいプロジェクト",
+    type: "棒針",
+    memo: "",
+    createdAt: new Date().toLocaleDateString("ja-JP"),
+    sections: [s],
+    activeSectionId: s.id,
+  };
+};
+
+const STORE_KEY = "knitting_v2";
+const loadData = () => {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+};
+const saveData = (projects, activeProjectId) => {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ projects, activeProjectId })); } catch {}
+};
+
+// ── Palette ───────────────────────────────────────────────────────────────────
+
+const C = {
+  bg: "#F7F4EE", card: "#FDFBF7",
+  green: "#2D4A3E", rose: "#C4837A", rosePale: "#F0D9D6",
+  gold: "#B8924A", goldPale: "#F5EEDD",
+  text: "#2C2416", textMid: "#6B5F4E", textLight: "#9C8E7A",
+  border: "#DDD5C4",
+};
+
+// ── Small components ──────────────────────────────────────────────────────────
+
+const Tag = ({ children }) => (
+  <span style={{ fontSize:11, background:C.goldPale, color:C.gold, border:`1px solid ${C.gold}`, borderRadius:4, padding:"2px 7px", fontFamily:"sans-serif" }}>
+    {children}
+  </span>
+);
+
+const GhostBtn = ({ onClick, children, style = {} }) => (
+  <button onClick={onClick} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.textMid, borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif", ...style }}>
+    {children}
+  </button>
+);
+
+const FieldLabel = ({ children }) => (
+  <label style={{ display:"block", fontSize:11, color:C.gold, letterSpacing:"0.1em", fontFamily:"sans-serif", textTransform:"uppercase", marginBottom:6, marginTop:16 }}>
+    {children}
+  </label>
+);
+
+const ProgressBar = ({ pct }) => (
+  <div style={{ background:C.border, borderRadius:4, height:6, overflow:"hidden" }}>
+    <div style={{ background:`linear-gradient(90deg,${C.green},${C.gold})`, height:"100%", borderRadius:4, width:`${pct}%`, transition:"width 0.3s ease" }} />
+  </div>
+);
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+
+function App() {
+  const [projects, setProjects] = useState(() => {
+    const d = loadData();
+    if (d && d.projects && d.projects.length > 0) return d.projects;
+    const p = initProject(); return [p];
+  });
+  const [activeProjectId, setActiveProjectId] = useState(() => {
+    const d = loadData();
+    if (d && d.activeProjectId) return d.activeProjectId;
+    const d2 = loadData(); // re-read after init
+    return null;
+  });
+  const [view, setView] = useState("counter");
+  const [editProjectDraft, setEditProjectDraft] = useState(null);
+  const [editSectionDraft, setEditSectionDraft] = useState(null);
+  const [tapFeedback, setTapFeedback] = useState(false);
+
+  // Init activeProjectId if null
+  useEffect(() => {
+    if (!activeProjectId && projects.length > 0) {
+      setActiveProjectId(projects[0].id);
+    }
+  }, []);
+
+  // Persist on change
+  useEffect(() => {
+    if (projects.length > 0) saveData(projects, activeProjectId);
+  }, [projects, activeProjectId]);
+
+  const activeProject = projects.find(p => p.id === activeProjectId);
+  const activeSection = activeProject?.sections?.find(s => s.id === activeProject.activeSectionId);
+
+  const updateProjects = fn => setProjects(ps => fn(ps));
+
+  const updateActiveProject = fn =>
+    updateProjects(ps => ps.map(p => p.id === activeProjectId ? fn(p) : p));
+
+  const updateActiveSection = fn =>
+    updateActiveProject(p => ({
+      ...p,
+      sections: p.sections.map(s => s.id === p.activeSectionId ? fn(s) : s)
+    }));
+
+  const increment = () => {
+    updateActiveSection(s => ({ ...s, rows: s.rows + 1 }));
+    setTapFeedback(true);
+    setTimeout(() => setTapFeedback(false), 150);
+  };
+
+  const decrement = () => updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows - 1) }));
+
+  const resetSection = () => {
+    if (window.confirm("この工程の段数を0にリセットしますか？"))
+      updateActiveSection(s => ({ ...s, rows: 0 }));
+  };
+
+  const toggleDone = id =>
+    updateActiveProject(p => ({
+      ...p,
+      sections: p.sections.map(s => s.id === id ? { ...s, done: !s.done } : s)
+    }));
+
+  const switchSection = id =>
+    updateActiveProject(p => ({ ...p, activeSectionId: id }));
+
+  const addSection = () => {
+    const s = newSection(`工程 ${(activeProject?.sections?.length || 0) + 1}`);
+    updateActiveProject(p => ({ ...p, sections: [...p.sections, s], activeSectionId: s.id }));
+  };
+
+  const moveSectionUp = id => {
+    updateActiveProject(p => {
+      const idx = p.sections.findIndex(s => s.id === id);
+      if (idx <= 0) return p;
+      const next = [...p.sections];
+      [next[idx-1], next[idx]] = [next[idx], next[idx-1]];
+      return { ...p, sections: next };
+    });
+  };
+
+  const moveSectionDown = id => {
+    updateActiveProject(p => {
+      const idx = p.sections.findIndex(s => s.id === id);
+      if (idx < 0 || idx >= p.sections.length - 1) return p;
+      const next = [...p.sections];
+      [next[idx], next[idx+1]] = [next[idx+1], next[idx]];
+      return { ...p, sections: next };
+    });
+  };
+
+  const deleteSection = id => {
+    if (!window.confirm("この工程を削除しますか？")) return;
+    updateActiveProject(p => {
+      const next = p.sections.filter(s => s.id !== id);
+      if (next.length === 0) { const s = newSection("工程 1"); return { ...p, sections: [s], activeSectionId: s.id }; }
+      const newActive = p.activeSectionId === id ? next[0].id : p.activeSectionId;
+      return { ...p, sections: next, activeSectionId: newActive };
+    });
+  };
+
+  const addProject = () => {
+    const p = initProject();
+    setProjects(ps => [...ps, p]);
+    setActiveProjectId(p.id);
+    setEditProjectDraft({ ...p });
+    setView("editProject");
+  };
+
+  const deleteProject = id => {
+    if (!window.confirm("このプロジェクトを削除しますか？")) return;
+    setProjects(ps => {
+      let next = ps.filter(p => p.id !== id);
+      if (next.length === 0) { const p = initProject(); next = [p]; setActiveProjectId(p.id); }
+      else if (id === activeProjectId) setActiveProjectId(next[next.length - 1].id);
+      return next;
+    });
+    setView("counter");
+  };
+
+  const sectionPct = s => s.targetRows ? Math.min(100, Math.round(s.rows / parseInt(s.targetRows) * 100)) : null;
+  const projectTotalRows = p => p.sections.reduce((a, s) => a + s.rows, 0);
+  const projectTotalTarget = p => {
+    const ts = p.sections.filter(s => s.targetRows).map(s => parseInt(s.targetRows));
+    return ts.length === p.sections.length ? ts.reduce((a,b)=>a+b,0) : null;
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg }}>
+
+      {/* Header */}
+      <header style={{ background:C.green, padding:"12px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100 }}>
+        <div style={{ color:"#F5EEDD", fontSize:18, fontWeight:"bold", letterSpacing:"0.03em" }}>🧶 Knitting Journal</div>
+        <nav style={{ display:"flex", gap:8 }}>
+          {[["counter","カウンター"],["projects","プロジェクト"]].map(([v,label]) => (
+            <button key={v} onClick={() => setView(v)} style={{
+              background: view===v ? C.gold : "transparent",
+              border: view===v ? `1px solid ${C.gold}` : "1px solid rgba(245,238,221,0.3)",
+              color: view===v ? C.green : "rgba(245,238,221,0.7)",
+              borderRadius:20, padding:"5px 14px", fontSize:13,
+              fontWeight: view===v ? "bold" : "normal",
+              cursor:"pointer", fontFamily:"sans-serif"
+            }}>{label}</button>
+          ))}
+        </nav>
+      </header>
+
+      <main style={{ maxWidth:480, margin:"0 auto", padding:"16px 14px 60px" }}>
+
+        {/* ── COUNTER ── */}
+        {view === "counter" && activeProject && (<>
+
+          {/* Project card */}
+          <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px", marginBottom:12, boxShadow:"0 2px 12px rgba(45,74,62,0.06)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+              <Tag>{activeProject.type}</Tag>
+              <span style={{ flex:1, fontSize:16, fontWeight:"bold", color:C.green }}>{activeProject.name}</span>
+              <GhostBtn onClick={() => { setEditProjectDraft({...activeProject}); setView("editProject"); }}>編集</GhostBtn>
+            </div>
+            {/* Overall stats */}
+            {(() => {
+              const total = projectTotalRows(activeProject);
+              const target = projectTotalTarget(activeProject);
+              const pct = target ? Math.min(100, Math.round(total/target*100)) : null;
+              const done = activeProject.sections.filter(s=>s.done).length;
+              return (
+                <div>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:6, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:15, fontWeight:"bold" }}>合計 {total}段</span>
+                    {target && <span style={{ fontSize:13, color:C.gold, fontFamily:"sans-serif" }}>{pct}%</span>}
+                    <span style={{ fontSize:12, color:C.textLight, fontFamily:"sans-serif", marginLeft:"auto" }}>{done}/{activeProject.sections.length} 工程完了</span>
+                  </div>
+                  {target && <ProgressBar pct={pct} />}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Section tabs */}
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
+            {activeProject.sections.map(s => (
+              <button key={s.id} onClick={() => switchSection(s.id)} style={{
+                background: s.id===activeProject.activeSectionId ? C.green : C.card,
+                border: s.id===activeProject.activeSectionId ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                color: s.id===activeProject.activeSectionId ? "#F5EEDD" : C.textMid,
+                borderRadius:20, padding:"6px 14px", fontSize:13, cursor:"pointer",
+                fontFamily:"sans-serif", fontWeight: s.id===activeProject.activeSectionId ? "bold" : "normal",
+                opacity: s.done ? 0.5 : 1,
+                textDecoration: s.done ? "line-through" : "none",
+              }}>
+                {s.done ? "✓ " : ""}{s.name}
+              </button>
+            ))}
+            <button onClick={addSection} style={{ background:"transparent", border:`1px dashed ${C.border}`, color:C.textLight, borderRadius:20, padding:"6px 12px", fontSize:16, cursor:"pointer" }}>＋</button>
+          </div>
+
+          {/* Active section */}
+          {activeSection && (
+            <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px", boxShadow:"0 2px 12px rgba(45,74,62,0.06)" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4, flexWrap:"wrap" }}>
+                <span style={{ fontSize:17, fontWeight:"bold", color:C.green, flex:1 }}>{activeSection.name}</span>
+                <GhostBtn onClick={() => { setEditSectionDraft({...activeSection}); setView("editSection"); }}>編集</GhostBtn>
+                <button onClick={() => toggleDone(activeSection.id)} style={{
+                  background: activeSection.done ? C.green : "transparent",
+                  border: activeSection.done ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                  color: activeSection.done ? "#F5EEDD" : C.textLight,
+                  borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif"
+                }}>{activeSection.done ? "✓ 完了" : "完了にする"}</button>
+              </div>
+
+              <div style={{ textAlign:"center", padding:"20px 0 16px" }}>
+                <div style={{ fontSize:92, fontWeight:"bold", color: tapFeedback ? C.rose : C.green, lineHeight:1, transition:"color 0.1s, transform 0.1s", transform: tapFeedback ? "scale(1.06)" : "scale(1)" }}>
+                  {activeSection.rows}
+                </div>
+                <div style={{ fontSize:18, color:C.textMid, marginTop:4, letterSpacing:"0.1em" }}>段目</div>
+                {sectionPct(activeSection) !== null && (
+                  <div style={{ marginTop:12 }}>
+                    <ProgressBar pct={sectionPct(activeSection)} />
+                    <div style={{ fontSize:12, color:C.textLight, marginTop:5, fontFamily:"sans-serif" }}>{sectionPct(activeSection)}% / 目標 {activeSection.targetRows}段</div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display:"flex", gap:12, marginBottom:10 }}>
+                <button onClick={decrement} style={{ flex:1, background:C.rosePale, color:C.rose, border:`1px solid ${C.rose}`, borderRadius:10, padding:"22px 0", fontSize:26, cursor:"pointer" }}>−</button>
+                <button onClick={increment} style={{ flex:3, background:C.green, color:"#F5EEDD", border:"none", borderRadius:10, padding:"22px 0", fontSize:22, fontWeight:"bold", cursor:"pointer", boxShadow:"0 4px 12px rgba(45,74,62,0.25)" }}>＋ 1段</button>
+              </div>
+              <button onClick={resetSection} style={{ width:"100%", background:"transparent", border:`1px solid ${C.border}`, color:C.textLight, borderRadius:8, padding:9, fontSize:13, cursor:"pointer", fontFamily:"sans-serif", marginBottom:12 }}>リセット</button>
+
+              {activeSection.memo && (
+                <div style={{ background:C.goldPale, borderRadius:8, padding:"12px 14px", borderLeft:`3px solid ${C.gold}`, marginTop:8 }}>
+                  <div style={{ fontSize:10, color:C.gold, fontFamily:"sans-serif", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:4 }}>メモ</div>
+                  <div style={{ fontSize:14, color:C.textMid, lineHeight:1.6, whiteSpace:"pre-wrap" }}>{activeSection.memo}</div>
+                </div>
+              )}
+
+              <button onClick={() => deleteSection(activeSection.id)} style={{ marginTop:14, background:"transparent", border:"none", color:C.rose, fontSize:12, cursor:"pointer", fontFamily:"sans-serif", textDecoration:"underline" }}>この工程を削除</button>
+            </div>
+          )}
+
+          {/* Quick project switch */}
+          {projects.length > 1 && (
+            <div style={{ marginTop:16, borderTop:`1px solid ${C.border}`, paddingTop:14 }}>
+              <div style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif", marginBottom:8 }}>プロジェクトを切り替え</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                {projects.map(p => (
+                  <button key={p.id} onClick={() => { setActiveProjectId(p.id); }} style={{
+                    background: p.id===activeProjectId ? C.green : "white",
+                    border: p.id===activeProjectId ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                    color: p.id===activeProjectId ? "#F5EEDD" : C.textMid,
+                    borderRadius:20, padding:"5px 14px", fontSize:13, cursor:"pointer", fontFamily:"sans-serif"
+                  }}>{p.name}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>)}
+
+        {/* ── PROJECTS ── */}
+        {view === "projects" && (
+          <div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+              <h2 style={{ fontSize:20, color:C.green }}>プロジェクト</h2>
+              <button onClick={addProject} style={{ background:C.green, color:"#F5EEDD", border:"none", borderRadius:8, padding:"8px 16px", fontSize:14, cursor:"pointer", fontFamily:"sans-serif" }}>＋ 新規</button>
+            </div>
+            {projects.map(p => {
+              const total = projectTotalRows(p);
+              const target = projectTotalTarget(p);
+              const pct = target ? Math.min(100, Math.round(total/target*100)) : null;
+              const done = p.sections.filter(s=>s.done).length;
+              return (
+                <div key={p.id} style={{ background:C.card, border:`1px solid ${p.id===activeProjectId ? C.green : C.border}`, borderRadius:10, padding:"14px 16px", marginBottom:10, boxShadow: p.id===activeProjectId ? `0 0 0 2px ${C.green}22` : "none" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                    <Tag>{p.type}</Tag>
+                    <span style={{ flex:1, fontSize:15, fontWeight:"bold", color:C.green }}>{p.name}</span>
+                    <span style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif" }}>{p.createdAt}</span>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:6, marginBottom:4 }}>
+                    <span style={{ fontSize:24, fontWeight:"bold" }}>{total}段</span>
+                    {target && <span style={{ fontSize:13, color:C.textMid, fontFamily:"sans-serif" }}>/ {target}段 ({pct}%)</span>}
+                    <span style={{ fontSize:12, color:C.textLight, fontFamily:"sans-serif", marginLeft:"auto" }}>{done}/{p.sections.length}工程</span>
+                  </div>
+                  {target && <div style={{ margin:"8px 0" }}><ProgressBar pct={pct} /></div>}
+                  <div style={{ display:"flex", gap:8, marginTop:10 }}>
+                    <button onClick={() => { setActiveProjectId(p.id); setView("counter"); }} style={{ flex:1, background:C.green, color:"#F5EEDD", border:"none", borderRadius:6, padding:"7px 0", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>
+                      {p.id===activeProjectId ? "✓ 選択中" : "選択"}
+                    </button>
+                    <button onClick={() => deleteProject(p.id)} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.rose, borderRadius:6, padding:"7px 14px", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>削除</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── EDIT PROJECT ── */}
+        {view === "editProject" && editProjectDraft && (
+          <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px" }}>
+            <h2 style={{ fontSize:20, color:C.green, marginBottom:4 }}>プロジェクトを編集</h2>
+
+            <FieldLabel>プロジェクト名</FieldLabel>
+            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
+              value={editProjectDraft.name}
+              onChange={e => setEditProjectDraft({...editProjectDraft, name:e.target.value})} />
+
+            <FieldLabel>種類</FieldLabel>
+            <div style={{ display:"flex", gap:8, marginTop:2 }}>
+              {["棒針","かぎ針","その他"].map(t => (
+                <button key={t} onClick={() => setEditProjectDraft({...editProjectDraft, type:t})} style={{
+                  flex:1, background: editProjectDraft.type===t ? C.green : C.bg,
+                  border: editProjectDraft.type===t ? `1px solid ${C.green}` : `1px solid ${C.border}`,
+                  color: editProjectDraft.type===t ? "#F5EEDD" : C.textMid,
+                  borderRadius:8, padding:"9px 0", fontSize:14, cursor:"pointer", fontFamily:"sans-serif"
+                }}>{t}</button>
+              ))}
+            </div>
+
+            <FieldLabel>メモ</FieldLabel>
+            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }}
+              placeholder="使用糸、針のサイズなど"
+              value={editProjectDraft.memo}
+              onChange={e => setEditProjectDraft({...editProjectDraft, memo:e.target.value})} />
+
+            <div style={{ display:"flex", gap:10, marginTop:24 }}>
+              <GhostBtn onClick={() => setView("counter")} style={{ flex:1, padding:"12px 0", fontSize:15 }}>キャンセル</GhostBtn>
+              <button onClick={() => {
+                updateProjects(ps => ps.map(p => p.id===editProjectDraft.id ? {...p, ...editProjectDraft} : p));
+                setView("counter");
+              }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
+            </div>
+          </div>
+        )}
+
+        {/* ── EDIT SECTION ── */}
+        {view === "editSection" && editSectionDraft && (
+          <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px" }}>
+            <h2 style={{ fontSize:20, color:C.green, marginBottom:4 }}>工程を編集</h2>
+
+            <FieldLabel>工程名</FieldLabel>
+            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
+              value={editSectionDraft.name}
+              onChange={e => setEditSectionDraft({...editSectionDraft, name:e.target.value})} />
+
+            <FieldLabel>目標段数（省略可）</FieldLabel>
+            <input type="number" style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
+              placeholder="例: 40"
+              value={editSectionDraft.targetRows}
+              onChange={e => setEditSectionDraft({...editSectionDraft, targetRows:e.target.value})} />
+
+            <FieldLabel>メモ</FieldLabel>
+            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }}
+              placeholder="この工程のメモ・パターンなど"
+              value={editSectionDraft.memo}
+              onChange={e => setEditSectionDraft({...editSectionDraft, memo:e.target.value})} />
+
+            <FieldLabel>工程の順番</FieldLabel>
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={() => { moveSectionUp(editSectionDraft.id); }} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↑ 前へ</button>
+              <button onClick={() => { moveSectionDown(editSectionDraft.id); }} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↓ 後へ</button>
+            </div>
+            <div style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif", marginTop:6 }}>
+              {activeProject?.sections && (() => {
+                const idx = activeProject.sections.findIndex(s => s.id === editSectionDraft.id);
+                return idx >= 0 ? `現在の位置: ${idx+1} / ${activeProject.sections.length}` : "";
+              })()}
+            </div>
+
+            <div style={{ display:"flex", gap:10, marginTop:24 }}>
+              <GhostBtn onClick={() => setView("counter")} style={{ flex:1, padding:"12px 0", fontSize:15 }}>キャンセル</GhostBtn>
+              <button onClick={() => {
+                updateActiveProject(p => ({
+                  ...p,
+                  sections: p.sections.map(s => s.id===editSectionDraft.id ? {...s, ...editSectionDraft} : s)
+                }));
+                setView("counter");
+              }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
+            </div>
+          </div>
+        )}
+
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+// Service Worker 登録 & アップデート通知
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          // アップデートあり → バナー表示
+          const banner = document.createElement('div');
+          banner.innerHTML = `
+            <div style="position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+              background:#2D4A3E;color:#F5EEDD;border-radius:12px;padding:12px 20px;
+              display:flex;align-items:center;gap:14px;box-shadow:0 4px 20px rgba(0,0,0,0.25);
+              font-family:sans-serif;font-size:14px;z-index:9999;max-width:320px;width:90%;">
+              <span>🧶 アップデートがあります</span>
+              <button onclick="
+                navigator.serviceWorker.controller.postMessage('skipWaiting');
+                window.location.reload();
+              " style="background:#B8924A;color:#2D4A3E;border:none;border-radius:8px;
+                padding:6px 14px;font-weight:bold;cursor:pointer;font-size:13px;white-space:nowrap;">
+                更新する
+              </button>
+            </div>
+          `;
+          document.body.appendChild(banner);
+        }
+      });
+    });
+  });
+}
+</script>
+</body>
+</html>
