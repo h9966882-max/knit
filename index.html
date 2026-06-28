@@ -145,32 +145,31 @@ const deleteChart = async (url) => {
 
 function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   const [activeIdx, setActiveIdx] = useState(0);
-  const [tool, setTool] = useState(null); // null=閲覧, pen, eraser
+  const [tool, setTool] = useState(null);
   const [color, setColor] = useState("#C4837A");
   const [lineWidth, setLineWidth] = useState(3);
   const [uploading, setUploading] = useState(false);
-  const [markerY, setMarkerY] = useState(null);
-  const [markerHeight, setMarkerHeight] = useState(2); // 1〜5段階
+  const [markerY, setMarkerY] = useState(0.2);
+  const [markerHeight, setMarkerHeight] = useState(2);
   const [showMarker, setShowMarker] = useState(true);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
 
-  const bgCanvasRef = useRef(null);   // 編み図画像レイヤー
-  const drawCanvasRef = useRef(null); // 書き込みレイヤー
-  const containerRef = useRef(null);
-  const wrapRef = useRef(null);
+  const bgCanvasRef = useRef(null);
+  const drawCanvasRef = useRef(null);
+  const viewportRef = useRef(null);
+  const fileInputRef = useRef(null);
   const drawing = useRef(false);
   const lastPos = useRef(null);
-  const snapshotRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const draggingMarker = useRef(false);
   const saveTimer = useRef(null);
+  const pinch = useRef(null);
+  const panStart = useRef(null);
 
   const activeChart = charts[activeIdx];
 
-  // 編み図画像を背景canvasに描画
   useEffect(() => {
     if (!activeChart || !bgCanvasRef.current) return;
-    const isPdf = activeChart.url?.toLowerCase().includes(".pdf");
-    if (isPdf) return;
+    if (activeChart.url?.toLowerCase().includes(".pdf")) return;
     const bg = bgCanvasRef.current;
     const ctx = bg.getContext("2d");
     const img = new Image();
@@ -179,82 +178,50 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
       bg.width = img.naturalWidth;
       bg.height = img.naturalHeight;
       ctx.drawImage(img, 0, 0);
-      // 書き込みcanvasも同サイズに
       const dc = drawCanvasRef.current;
       if (dc) {
         dc.width = img.naturalWidth;
         dc.height = img.naturalHeight;
-        // 既存の書き込みを復元
         if (activeChart.annotation) {
           const ann = new Image();
-          ann.onload = () => {
-            const dctx = dc.getContext("2d");
-            dctx.clearRect(0, 0, dc.width, dc.height);
-            dctx.drawImage(ann, 0, 0);
-          };
+          ann.onload = () => { dc.getContext("2d").drawImage(ann, 0, 0); };
           ann.src = activeChart.annotation;
         }
       }
-      // マーカー初期位置（上から20%）
-      setMarkerY(20);
+      setScale(1); setOffset({ x: 0, y: 0 });
     };
     img.src = activeChart.url;
   }, [activeIdx]);
 
-  const getPos = (e) => {
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const touch = e.touches ? e.touches[0] : e;
+  const getCanvasPos = (clientX, clientY) => {
+    const dc = drawCanvasRef.current;
+    if (!dc) return null;
+    const rect = dc.getBoundingClientRect();
     return {
-      x: (touch.clientX - rect.left) * scaleX,
-      y: (touch.clientY - rect.top) * scaleY,
+      x: (clientX - rect.left) * (dc.width / rect.width),
+      y: (clientY - rect.top) * (dc.height / rect.height),
     };
   };
 
   const saveAnnotation = () => {
-    const dc = drawCanvasRef.current;
-    if (!dc) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
+      const dc = drawCanvasRef.current;
+      if (!dc) return;
       const annotation = dc.toDataURL("image/png");
       const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation } : c);
       onChartsChange(updated);
-    }, 500);
+    }, 600);
   };
 
-  const startDraw = (e) => {
-    if (e.touches && e.touches.length > 1) return;
-    e.preventDefault();
-    const pos = getPos(e);
-    if (!pos) return;
-    drawing.current = true;
-    lastPos.current = pos;
+  const doDraw = (pos) => {
     const dc = drawCanvasRef.current;
+    if (!dc || !lastPos.current) return;
     const ctx = dc.getContext("2d");
-    if (tool === "pen" || tool === "eraser") {
-      // ペン・消しゴム開始
-    }
-    snapshotRef.current = ctx.getImageData(0, 0, dc.width, dc.height);
-  };
-
-  const draw = (e) => {
-    if (e.touches && e.touches.length > 1) return;
-    if (!drawing.current) return;
-    e.preventDefault();
-    const pos = getPos(e);
-    if (!pos) return;
-    const dc = drawCanvasRef.current;
-    const ctx = dc.getContext("2d");
-
     ctx.beginPath();
     ctx.moveTo(lastPos.current.x, lastPos.current.y);
     ctx.lineTo(pos.x, pos.y);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
     if (tool === "eraser") {
       ctx.globalCompositeOperation = "destination-out";
       ctx.strokeStyle = "rgba(0,0,0,1)";
@@ -266,44 +233,89 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
     }
     ctx.stroke();
     ctx.globalCompositeOperation = "source-over";
-    lastPos.current = pos;
   };
 
-  const endDraw = () => {
+  const onTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      const t0 = e.touches[0], t1 = e.touches[1];
+      pinch.current = { startDist: Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY), startScale: scale };
+      drawing.current = false; return;
+    }
+    if (tool === "pen" || tool === "eraser") {
+      e.preventDefault();
+      const t = e.touches[0];
+      const pos = getCanvasPos(t.clientX, t.clientY);
+      if (!pos) return;
+      drawing.current = true; lastPos.current = pos;
+    } else {
+      const t = e.touches[0];
+      panStart.current = { clientX: t.clientX, clientY: t.clientY, ox: offset.x, oy: offset.y };
+    }
+  };
+
+  const onTouchMove = (e) => {
+    if (e.touches.length === 2 && pinch.current) {
+      e.preventDefault();
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const dist = Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY);
+      setScale(Math.max(0.5, Math.min(8, pinch.current.startScale * dist / pinch.current.startDist)));
+      return;
+    }
+    if ((tool === "pen" || tool === "eraser") && drawing.current) {
+      e.preventDefault();
+      const t = e.touches[0];
+      const pos = getCanvasPos(t.clientX, t.clientY);
+      if (!pos) return;
+      doDraw(pos); lastPos.current = pos;
+    } else if (panStart.current && !tool) {
+      e.preventDefault();
+      const t = e.touches[0];
+      setOffset({ x: panStart.current.ox + t.clientX - panStart.current.clientX, y: panStart.current.oy + t.clientY - panStart.current.clientY });
+    }
+  };
+
+  const onTouchEnd = () => {
+    pinch.current = null; panStart.current = null;
+    if (drawing.current) { drawing.current = false; saveAnnotation(); }
+  };
+
+  const onMouseDown = (e) => {
+    if (tool !== "pen" && tool !== "eraser") return;
+    const pos = getCanvasPos(e.clientX, e.clientY);
+    if (!pos) return;
+    drawing.current = true; lastPos.current = pos;
+  };
+  const onMouseMove = (e) => {
     if (!drawing.current) return;
-    drawing.current = false;
-    saveAnnotation();
+    const pos = getCanvasPos(e.clientX, e.clientY);
+    if (!pos) return;
+    doDraw(pos); lastPos.current = pos;
   };
+  const onMouseUp = () => { if (drawing.current) { drawing.current = false; saveAnnotation(); } };
 
-  // 段マーカーのドラッグ
   const startMarkerDrag = (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    draggingMarker.current = true;
-    // Safari対応: touchmoveをpassive:falseで登録
-    document.addEventListener("touchmove", preventScroll, { passive: false });
-  };
-
-  const preventScroll = (e) => {
-    if (draggingMarker.current) e.preventDefault();
-  };
-
-  const onMarkerMove = (e) => {
-    if (!draggingMarker.current) return;
-    e.preventDefault();
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    const touch = e.touches ? e.touches[0] : e;
-    const relY = touch.clientY - rect.top + (containerRef.current?.scrollTop || 0);
-    const totalH = wrap.scrollHeight;
-    const pct = Math.max(0, Math.min(100, (relY / totalH) * 100));
-    setMarkerY(pct);
-  };
-
-  const endMarkerDrag = () => {
-    draggingMarker.current = false;
-    document.removeEventListener("touchmove", preventScroll);
+    e.stopPropagation(); e.preventDefault();
+    let dragging = true;
+    const move = (ev) => {
+      if (!dragging) return;
+      ev.preventDefault();
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const rect = vp.getBoundingClientRect();
+      const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      setMarkerY(Math.max(0, Math.min(1, (clientY - rect.top) / rect.height)));
+    };
+    const up = () => {
+      dragging = false;
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("touchmove", move);
+      window.removeEventListener("touchend", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    window.addEventListener("touchmove", move, { passive: false });
+    window.addEventListener("touchend", up);
   };
 
   const handleUpload = async (e) => {
@@ -313,13 +325,9 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
     try {
       const url = await uploadChart(projectId, file);
       const updated = [...charts, { url, name: file.name, annotation: null }];
-      onChartsChange(updated);
-      setActiveIdx(updated.length - 1);
-    } catch(err) {
-      alert("アップロードに失敗しました: " + err.message);
-    }
-    setUploading(false);
-    e.target.value = "";
+      onChartsChange(updated); setActiveIdx(updated.length - 1);
+    } catch(err) { alert("アップロードに失敗しました: " + err.message); }
+    setUploading(false); e.target.value = "";
   };
 
   const handleDelete = async () => {
@@ -332,25 +340,25 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
 
   const isPdf = activeChart?.url?.toLowerCase().includes(".pdf");
   const COLORS = ["#C4837A","#2D4A3E","#B8924A","#4488ff","#000000","#ffffff"];
+  const markerHeightPx = [3, 6, 12, 20, 30][markerHeight - 1];
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"#1a1a1a", zIndex:200, display:"flex", flexDirection:"column" }}
-      onMouseMove={onMarkerMove} onMouseUp={endMarkerDrag}
-      onTouchMove={onMarkerMove} onTouchEnd={endMarkerDrag}>
+    <div style={{ position:"fixed", inset:0, background:"#1a1a1a", zIndex:200, display:"flex", flexDirection:"column" }}>
 
-      {/* Top bar */}
       <div style={{ background:"#2D4A3E", padding:"10px 14px", display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
         <button onClick={onClose} style={{ background:"transparent", border:"none", color:"#F5EEDD", fontSize:22, cursor:"pointer", padding:"0 4px" }}>←</button>
         <span style={{ color:"#F5EEDD", fontSize:14, fontWeight:"bold", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
           {activeChart?.name || "編み図"}
         </span>
+        {scale !== 1 && (
+          <button onClick={() => { setScale(1); setOffset({x:0,y:0}); }} style={{ background:"rgba(245,238,221,0.15)", border:"1px solid rgba(245,238,221,0.3)", color:"#F5EEDD", borderRadius:8, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif" }}>リセット</button>
+        )}
         <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"6px 12px", fontSize:13, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>
           {uploading ? "…" : "＋"}
         </button>
         <input ref={fileInputRef} type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={handleUpload} />
       </div>
 
-      {/* Chart tabs */}
       {charts.length > 1 && (
         <div style={{ background:"#243d33", padding:"5px 14px", display:"flex", gap:6, overflowX:"auto", flexShrink:0 }}>
           {charts.map((c, i) => (
@@ -365,11 +373,12 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
         </div>
       )}
 
-      {/* Main: canvas + right toolbar */}
       <div style={{ flex:1, display:"flex", overflow:"hidden" }}>
 
-        {/* Scrollable area */}
-        <div ref={containerRef} style={{ flex:1, overflow:"auto", WebkitOverflowScrolling:"touch", position:"relative" }}>
+        <div ref={viewportRef} style={{ flex:1, overflow:"hidden", position:"relative", background:"#111", touchAction:"none" }}
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
+        >
           {charts.length === 0 ? (
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", color:"rgba(245,238,221,0.5)", fontFamily:"sans-serif", padding:32 }}>
               <div style={{ fontSize:48, marginBottom:12 }}>📄</div>
@@ -377,55 +386,34 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
               <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"10px 20px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif", marginTop:8 }}>＋ 追加</button>
             </div>
           ) : isPdf ? (
-            <iframe src={activeChart.url} style={{ width:"100%", height:"100%", minHeight:"80vh", border:"none" }} />
+            <iframe src={activeChart.url} style={{ width:"100%", height:"100%", border:"none" }} />
           ) : (
-            // 2レイヤー構造
-            <div ref={wrapRef} style={{ position:"relative", width:"100%", display:"inline-block" }}>
-              {/* 背景：編み図画像 */}
-              <canvas ref={bgCanvasRef} style={{ display:"block", width:"100%" }} />
-              {/* 書き込みレイヤー */}
-              <canvas
-                ref={drawCanvasRef}
-                style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
-                  touchAction: (tool === "pen" || tool === "eraser") ? "none" : "pan-x pan-y pinch-zoom",
-                  cursor: tool==="eraser" ? "crosshair" : tool==="pen" ? "crosshair" : "default" }}
-                onMouseDown={tool ? startDraw : null} onMouseMove={tool ? draw : null}
-                onMouseUp={tool ? endDraw : null} onMouseLeave={tool ? endDraw : null}
-                onTouchStart={tool ? startDraw : null} onTouchMove={tool ? draw : null}
-                onTouchEnd={tool ? endDraw : null}
-              />
-              {/* 段マーカー */}
-              {showMarker && markerY !== null && (
-                <div style={{ position:"absolute", left:0, right:0, top:`${markerY}%`, zIndex:10, pointerEvents:"none" }}>
-                  <div style={{ position:"absolute", left:0, right:0, top:`-${markerHeight * 12}px`, height:`${markerHeight * 24}px`, background:"rgba(184,146,74,0.25)", borderTop:"2px solid rgba(184,146,74,0.8)", borderBottom:"2px solid rgba(184,146,74,0.8)" }} />
-                  <div
-                    style={{ position:"absolute", right:0, top:`-${markerHeight * 12 + 16}px`, width:36, height:36, background:"#B8924A", borderRadius:"50% 0 0 50%", display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", pointerEvents:"auto", boxShadow:"-2px 0 8px rgba(0,0,0,0.3)", touchAction:"none" }}
-                    onMouseDown={startMarkerDrag}
-                    onTouchStart={startMarkerDrag}
-                  >
-                    <span style={{ color:"#fff", fontSize:16, userSelect:"none" }}>⇕</span>
-                  </div>
-                </div>
-              )}
+            <div style={{ transform:`translate(${offset.x}px,${offset.y}px) scale(${scale})`, transformOrigin:"center center", width:"100%", height:"100%", display:"flex", alignItems:"flex-start", justifyContent:"center" }}>
+              <div style={{ position:"relative", display:"inline-block" }}>
+                <canvas ref={bgCanvasRef} style={{ display:"block", maxWidth:"100%" }} />
+                <canvas ref={drawCanvasRef} style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%", cursor: tool==="eraser"||tool==="pen" ? "crosshair" : "grab" }} />
+              </div>
+            </div>
+          )}
+
+          {showMarker && !isPdf && charts.length > 0 && (
+            <div style={{ position:"absolute", left:0, right:0, top:`${markerY*100}%`, zIndex:20, pointerEvents:"none", transform:"translateY(-50%)" }}>
+              <div style={{ position:"absolute", left:0, right:0, top:`-${markerHeightPx/2}px`, height:`${markerHeightPx}px`, background:"rgba(184,146,74,0.3)", borderTop:"1.5px solid rgba(184,146,74,0.9)", borderBottom:"1.5px solid rgba(184,146,74,0.9)" }} />
+              <div
+                style={{ position:"absolute", right:0, top:-18, width:36, height:36, background:"#B8924A", borderRadius:"50% 0 0 50%", display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", pointerEvents:"auto", boxShadow:"-2px 0 8px rgba(0,0,0,0.4)", touchAction:"none" }}
+                onMouseDown={startMarkerDrag} onTouchStart={startMarkerDrag}
+              >
+                <span style={{ color:"#fff", fontSize:16, userSelect:"none" }}>⇕</span>
+              </div>
             </div>
           )}
         </div>
 
-        {/* Right toolbar */}
         {!isPdf && charts.length > 0 && (
           <div style={{ width:52, background:"#2D4A3E", display:"flex", flexDirection:"column", alignItems:"center", padding:"10px 0", gap:10, flexShrink:0, overflowY:"auto" }}>
 
-            {/* Tools */}
-            {/* 閲覧モード */}
-            <button onClick={() => setTool(null)} title="閲覧・ズーム" style={{
-              background: tool===null ? "#B8924A" : "transparent",
-              border: `1px solid ${tool===null ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
-              borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
-              display:"flex", alignItems:"center", justifyContent:"center",
-            }}>👁</button>
-
-            {[["pen","✏️","ペン"],["eraser","🧹","消しゴム"]].map(([t, icon, label]) => (
-              <button key={t} onClick={() => setTool(t)} title={label} style={{
+            {[[null,"👁","閲覧"],["pen","✏️","ペン"],["eraser","🧹","消しゴム"]].map(([t, icon, label]) => (
+              <button key={String(t)} onClick={() => setTool(t)} title={label} style={{
                 background: tool===t ? "#B8924A" : "transparent",
                 border: `1px solid ${tool===t ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
                 borderRadius:10, width:42, height:42, fontSize:20, cursor:"pointer",
@@ -433,7 +421,8 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
               }}>{icon}</button>
             ))}
 
-            {/* 段マーカートグル */}
+            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
+
             <button onClick={() => setShowMarker(m => !m)} title="段マーカー" style={{
               background: showMarker ? "rgba(184,146,74,0.3)" : "transparent",
               border: `1px solid ${showMarker ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
@@ -441,26 +430,22 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
               display:"flex", alignItems:"center", justifyContent:"center",
             }}>📍</button>
 
-            {/* マーカー幅 */}
-            {showMarker && (
-              <>
-                <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
-                {[1,2,3,4,5].map(h => (
-                  <button key={h} onClick={() => setMarkerHeight(h)} title={`幅 ${h}`} style={{
-                    background: markerHeight===h ? "rgba(184,146,74,0.4)" : "transparent",
-                    border: `1px solid ${markerHeight===h ? "#B8924A" : "rgba(245,238,221,0.2)"}`,
-                    borderRadius:6, width:42, height:24, cursor:"pointer",
-                    display:"flex", alignItems:"center", justifyContent:"center",
-                  }}>
-                    <div style={{ width:28, height: h*2+2, background:"rgba(184,146,74,0.7)", borderRadius:2 }} />
-                  </button>
-                ))}
-              </>
-            )}
+            {showMarker && <>
+              <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
+              {[1,2,3,4,5].map(h => (
+                <button key={h} onClick={() => setMarkerHeight(h)} style={{
+                  background: markerHeight===h ? "rgba(184,146,74,0.4)" : "transparent",
+                  border: `1px solid ${markerHeight===h ? "#B8924A" : "rgba(245,238,221,0.2)"}`,
+                  borderRadius:6, width:42, height:22, cursor:"pointer",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                }}>
+                  <div style={{ width:28, height:[2,3,5,8,11][h-1], background:"rgba(184,146,74,0.8)", borderRadius:2 }} />
+                </button>
+              ))}
+            </>}
 
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
-            {/* Colors */}
             {COLORS.map(cl => (
               <button key={cl} onClick={() => { setColor(cl); setTool("pen"); }} style={{
                 width:26, height:26, borderRadius:"50%", background:cl,
@@ -471,21 +456,19 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
 
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
-            {/* Line width */}
-            {[2,5,10].map(w => (
+            {[2,4,8].map(w => (
               <button key={w} onClick={() => setLineWidth(w)} style={{
                 background: lineWidth===w ? "#B8924A" : "transparent",
                 border: `1px solid ${lineWidth===w ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
-                borderRadius:8, width:42, height:28, cursor:"pointer",
+                borderRadius:8, width:42, height:26, cursor:"pointer",
                 display:"flex", alignItems:"center", justifyContent:"center",
               }}>
-                <div style={{ width:24, height:w===2?2:w===5?4:7, background:"#F5EEDD", borderRadius:4 }} />
+                <div style={{ width:24, height:w===2?1:w===4?3:5, background:"#F5EEDD", borderRadius:3 }} />
               </button>
             ))}
 
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
-            {/* Delete chart */}
             <button onClick={handleDelete} title="削除" style={{
               background:"transparent", border:"1px solid rgba(244,164,164,0.3)",
               color:"#f4a4a4", borderRadius:10, width:42, height:42, fontSize:18,
@@ -497,6 +480,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
     </div>
   );
 }
+
 
 const C = {
   bg: "#F7F4EE", card: "#FDFBF7",
