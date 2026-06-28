@@ -145,11 +145,12 @@ const deleteChart = async (url) => {
 
 function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   const [activeIdx, setActiveIdx] = useState(0);
-  const [tool, setTool] = useState("pen");
+  const [tool, setTool] = useState(null); // null=閲覧, pen, eraser
   const [color, setColor] = useState("#C4837A");
   const [lineWidth, setLineWidth] = useState(3);
   const [uploading, setUploading] = useState(false);
-  const [markerY, setMarkerY] = useState(null); // 段マーカーのY位置（%）
+  const [markerY, setMarkerY] = useState(null);
+  const [markerHeight, setMarkerHeight] = useState(2); // 1〜5段階
   const [showMarker, setShowMarker] = useState(true);
 
   const bgCanvasRef = useRef(null);   // 編み図画像レイヤー
@@ -279,6 +280,12 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
     e.stopPropagation();
     e.preventDefault();
     draggingMarker.current = true;
+    // Safari対応: touchmoveをpassive:falseで登録
+    document.addEventListener("touchmove", preventScroll, { passive: false });
+  };
+
+  const preventScroll = (e) => {
+    if (draggingMarker.current) e.preventDefault();
   };
 
   const onMarkerMove = (e) => {
@@ -288,14 +295,16 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
     if (!wrap) return;
     const rect = wrap.getBoundingClientRect();
     const touch = e.touches ? e.touches[0] : e;
-    // コンテナのスクロール位置を考慮
     const relY = touch.clientY - rect.top + (containerRef.current?.scrollTop || 0);
     const totalH = wrap.scrollHeight;
     const pct = Math.max(0, Math.min(100, (relY / totalH) * 100));
     setMarkerY(pct);
   };
 
-  const endMarkerDrag = () => { draggingMarker.current = false; };
+  const endMarkerDrag = () => {
+    draggingMarker.current = false;
+    document.removeEventListener("touchmove", preventScroll);
+  };
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];
@@ -378,23 +387,23 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
               <canvas
                 ref={drawCanvasRef}
                 style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
-                  touchAction: tool === "pen" || tool === "eraser" ? "none" : "pan-x pan-y pinch-zoom",
-                  cursor: tool==="eraser" ? "crosshair" : "default" }}
-                onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-                onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+                  touchAction: (tool === "pen" || tool === "eraser") ? "none" : "pan-x pan-y pinch-zoom",
+                  cursor: tool==="eraser" ? "crosshair" : tool==="pen" ? "crosshair" : "default" }}
+                onMouseDown={tool ? startDraw : null} onMouseMove={tool ? draw : null}
+                onMouseUp={tool ? endDraw : null} onMouseLeave={tool ? endDraw : null}
+                onTouchStart={tool ? startDraw : null} onTouchMove={tool ? draw : null}
+                onTouchEnd={tool ? endDraw : null}
               />
               {/* 段マーカー */}
               {showMarker && markerY !== null && (
                 <div style={{ position:"absolute", left:0, right:0, top:`${markerY}%`, zIndex:10, pointerEvents:"none" }}>
-                  {/* 半透明の帯 */}
-                  <div style={{ position:"absolute", left:0, right:0, top:-12, height:24, background:"rgba(184,146,74,0.25)", borderTop:"2px solid rgba(184,146,74,0.8)", borderBottom:"2px solid rgba(184,146,74,0.8)" }} />
-                  {/* ドラッグハンドル */}
+                  <div style={{ position:"absolute", left:0, right:0, top:`-${markerHeight * 12}px`, height:`${markerHeight * 24}px`, background:"rgba(184,146,74,0.25)", borderTop:"2px solid rgba(184,146,74,0.8)", borderBottom:"2px solid rgba(184,146,74,0.8)" }} />
                   <div
-                    style={{ position:"absolute", right:0, top:-16, width:32, height:32, background:"#B8924A", borderRadius:"50% 0 0 50%", display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", pointerEvents:"auto", boxShadow:"-2px 0 8px rgba(0,0,0,0.3)" }}
+                    style={{ position:"absolute", right:0, top:`-${markerHeight * 12 + 16}px`, width:36, height:36, background:"#B8924A", borderRadius:"50% 0 0 50%", display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", pointerEvents:"auto", boxShadow:"-2px 0 8px rgba(0,0,0,0.3)", touchAction:"none" }}
                     onMouseDown={startMarkerDrag}
                     onTouchStart={startMarkerDrag}
                   >
-                    <span style={{ color:"#fff", fontSize:14, userSelect:"none" }}>⇕</span>
+                    <span style={{ color:"#fff", fontSize:16, userSelect:"none" }}>⇕</span>
                   </div>
                 </div>
               )}
@@ -407,6 +416,14 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
           <div style={{ width:52, background:"#2D4A3E", display:"flex", flexDirection:"column", alignItems:"center", padding:"10px 0", gap:10, flexShrink:0, overflowY:"auto" }}>
 
             {/* Tools */}
+            {/* 閲覧モード */}
+            <button onClick={() => setTool(null)} title="閲覧・ズーム" style={{
+              background: tool===null ? "#B8924A" : "transparent",
+              border: `1px solid ${tool===null ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
+              borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
+              display:"flex", alignItems:"center", justifyContent:"center",
+            }}>👁</button>
+
             {[["pen","✏️","ペン"],["eraser","🧹","消しゴム"]].map(([t, icon, label]) => (
               <button key={t} onClick={() => setTool(t)} title={label} style={{
                 background: tool===t ? "#B8924A" : "transparent",
@@ -423,6 +440,23 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
               borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
               display:"flex", alignItems:"center", justifyContent:"center",
             }}>📍</button>
+
+            {/* マーカー幅 */}
+            {showMarker && (
+              <>
+                <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
+                {[1,2,3,4,5].map(h => (
+                  <button key={h} onClick={() => setMarkerHeight(h)} title={`幅 ${h}`} style={{
+                    background: markerHeight===h ? "rgba(184,146,74,0.4)" : "transparent",
+                    border: `1px solid ${markerHeight===h ? "#B8924A" : "rgba(245,238,221,0.2)"}`,
+                    borderRadius:6, width:42, height:24, cursor:"pointer",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                  }}>
+                    <div style={{ width:28, height: h*2+2, background:"rgba(184,146,74,0.7)", borderRadius:2 }} />
+                  </button>
+                ))}
+              </>
+            )}
 
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
