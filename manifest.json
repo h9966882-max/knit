@@ -1,7 +1,7 @@
 {
   "name": "Knitting Journal",
-  "short_name": "編み物",
-  "description": "編み物プロジェクトの段数管理アプリ",
+  "short_name": "Knitting Journal",
+  "description": "編み物段数管理アプリ",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#F7F4EE",
