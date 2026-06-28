@@ -535,6 +535,12 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     }, 800);
   };
 
+  // color・lineWidthもrefで管理
+  const colorRef = useRef(color);
+  useEffect(() => { colorRef.current = color; }, [color]);
+  const lineWidthRef = useRef(lineWidth);
+  useEffect(() => { lineWidthRef.current = lineWidth; }, [lineWidth]);
+
   const doDraw = (pos) => {
     const dc = drawCanvasRef.current;
     if (!dc || !lastPos.current) return;
@@ -543,14 +549,14 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     ctx.moveTo(lastPos.current.x, lastPos.current.y);
     ctx.lineTo(pos.x, pos.y);
     ctx.lineCap = "round"; ctx.lineJoin = "round";
-    if (tool === "eraser") {
+    if (toolRef.current === "eraser") {
       ctx.globalCompositeOperation = "destination-out";
       ctx.strokeStyle = "rgba(0,0,0,1)";
-      ctx.lineWidth = lineWidth * 10;
+      ctx.lineWidth = lineWidthRef.current * 10;
     } else {
       ctx.globalCompositeOperation = "source-over";
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lineWidth;
+      ctx.strokeStyle = colorRef.current;
+      ctx.lineWidth = lineWidthRef.current;
     }
     ctx.stroke();
     ctx.globalCompositeOperation = "source-over";
