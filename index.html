@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>🧶 Knitting Journal</title>
 <link rel="manifest" href="./manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -149,40 +149,60 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   const [color, setColor] = useState("#C4837A");
   const [lineWidth, setLineWidth] = useState(3);
   const [uploading, setUploading] = useState(false);
-  const canvasRef = useRef(null);
+  const [markerY, setMarkerY] = useState(null); // 段マーカーのY位置（%）
+  const [showMarker, setShowMarker] = useState(true);
+
+  const bgCanvasRef = useRef(null);   // 編み図画像レイヤー
+  const drawCanvasRef = useRef(null); // 書き込みレイヤー
   const containerRef = useRef(null);
+  const wrapRef = useRef(null);
   const drawing = useRef(false);
   const lastPos = useRef(null);
-  const rulerStart = useRef(null);
   const snapshotRef = useRef(null);
   const fileInputRef = useRef(null);
-  const imgRef = useRef(null);
+  const draggingMarker = useRef(false);
+  const saveTimer = useRef(null);
 
   const activeChart = charts[activeIdx];
 
+  // 編み図画像を背景canvasに描画
   useEffect(() => {
-    if (!activeChart || !canvasRef.current) return;
+    if (!activeChart || !bgCanvasRef.current) return;
     const isPdf = activeChart.url?.toLowerCase().includes(".pdf");
     if (isPdf) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
+    const bg = bgCanvasRef.current;
+    const ctx = bg.getContext("2d");
     const img = new Image();
     img.crossOrigin = "anonymous";
-    imgRef.current = img;
     img.onload = () => {
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+      bg.width = img.naturalWidth;
+      bg.height = img.naturalHeight;
       ctx.drawImage(img, 0, 0);
-      if (activeChart.annotation) {
-        const ann = new Image();
-        ann.onload = () => ctx.drawImage(ann, 0, 0);
-        ann.src = activeChart.annotation;
+      // 書き込みcanvasも同サイズに
+      const dc = drawCanvasRef.current;
+      if (dc) {
+        dc.width = img.naturalWidth;
+        dc.height = img.naturalHeight;
+        // 既存の書き込みを復元
+        if (activeChart.annotation) {
+          const ann = new Image();
+          ann.onload = () => {
+            const dctx = dc.getContext("2d");
+            dctx.clearRect(0, 0, dc.width, dc.height);
+            dctx.drawImage(ann, 0, 0);
+          };
+          ann.src = activeChart.annotation;
+        }
       }
+      // マーカー初期位置（上から20%）
+      setMarkerY(20);
     };
     img.src = activeChart.url;
-  }, [activeIdx, charts]);
+  }, [activeIdx]);
 
-  const getPos = (e, canvas) => {
+  const getPos = (e) => {
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -193,64 +213,89 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
     };
   };
 
+  const saveAnnotation = () => {
+    const dc = drawCanvasRef.current;
+    if (!dc) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const annotation = dc.toDataURL("image/png");
+      const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation } : c);
+      onChartsChange(updated);
+    }, 500);
+  };
+
   const startDraw = (e) => {
-    if (e.touches && e.touches.length > 1) return; // ピンチ中は描かない
+    if (e.touches && e.touches.length > 1) return;
     e.preventDefault();
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const pos = getPos(e, canvas);
+    const pos = getPos(e);
+    if (!pos) return;
     drawing.current = true;
     lastPos.current = pos;
-    if (tool === "ruler") {
-      rulerStart.current = pos;
-      snapshotRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const dc = drawCanvasRef.current;
+    const ctx = dc.getContext("2d");
+    if (tool === "pen" || tool === "eraser") {
+      // ペン・消しゴム開始
     }
+    snapshotRef.current = ctx.getImageData(0, 0, dc.width, dc.height);
   };
 
   const draw = (e) => {
     if (e.touches && e.touches.length > 1) return;
-    e.preventDefault();
     if (!drawing.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const pos = getPos(e, canvas);
-    if (tool === "ruler") {
-      ctx.putImageData(snapshotRef.current, 0, 0);
-      ctx.beginPath();
-      ctx.moveTo(rulerStart.current.x, rulerStart.current.y);
-      ctx.lineTo(pos.x, pos.y);
+    e.preventDefault();
+    const pos = getPos(e);
+    if (!pos) return;
+    const dc = drawCanvasRef.current;
+    const ctx = dc.getContext("2d");
+
+    ctx.beginPath();
+    ctx.moveTo(lastPos.current.x, lastPos.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (tool === "eraser") {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.strokeStyle = "rgba(0,0,0,1)";
+      ctx.lineWidth = lineWidth * 10;
+    } else {
+      ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = color;
       ctx.lineWidth = lineWidth;
-      ctx.lineCap = "round";
-      ctx.stroke();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(lastPos.current.x, lastPos.current.y);
-      ctx.lineTo(pos.x, pos.y);
-      ctx.lineWidth = tool === "eraser" ? lineWidth * 8 : lineWidth;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      if (tool === "eraser") {
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.strokeStyle = "rgba(0,0,0,1)";
-      } else {
-        ctx.globalCompositeOperation = "source-over";
-        ctx.strokeStyle = color;
-      }
-      ctx.stroke();
-      ctx.globalCompositeOperation = "source-over";
-      lastPos.current = pos;
     }
+    ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+    lastPos.current = pos;
   };
 
   const endDraw = () => {
     if (!drawing.current) return;
     drawing.current = false;
-    const canvas = canvasRef.current;
-    const annotation = canvas.toDataURL("image/png");
-    const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation } : c);
-    onChartsChange(updated);
+    saveAnnotation();
   };
+
+  // 段マーカーのドラッグ
+  const startMarkerDrag = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    draggingMarker.current = true;
+  };
+
+  const onMarkerMove = (e) => {
+    if (!draggingMarker.current) return;
+    e.preventDefault();
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    // コンテナのスクロール位置を考慮
+    const relY = touch.clientY - rect.top + (containerRef.current?.scrollTop || 0);
+    const totalH = wrap.scrollHeight;
+    const pct = Math.max(0, Math.min(100, (relY / totalH) * 100));
+    setMarkerY(pct);
+  };
+
+  const endMarkerDrag = () => { draggingMarker.current = false; };
 
   const handleUpload = async (e) => {
     const file = e.target.files[0];
@@ -280,106 +325,136 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   const COLORS = ["#C4837A","#2D4A3E","#B8924A","#4488ff","#000000","#ffffff"];
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"#1a1a1a", zIndex:200, display:"flex", flexDirection:"column" }}>
+    <div style={{ position:"fixed", inset:0, background:"#1a1a1a", zIndex:200, display:"flex", flexDirection:"column" }}
+      onMouseMove={onMarkerMove} onMouseUp={endMarkerDrag}
+      onTouchMove={onMarkerMove} onTouchEnd={endMarkerDrag}>
 
       {/* Top bar */}
-      <div style={{ background:"#2D4A3E", padding:"10px 14px", display:"flex", alignItems:"center", gap:8, flexShrink:0, zIndex:10 }}>
+      <div style={{ background:"#2D4A3E", padding:"10px 14px", display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
         <button onClick={onClose} style={{ background:"transparent", border:"none", color:"#F5EEDD", fontSize:22, cursor:"pointer", padding:"0 4px" }}>←</button>
-        <span style={{ color:"#F5EEDD", fontSize:15, fontWeight:"bold", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+        <span style={{ color:"#F5EEDD", fontSize:14, fontWeight:"bold", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
           {activeChart?.name || "編み図"}
         </span>
-        <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"6px 14px", fontSize:13, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>
-          {uploading ? "…" : "＋ 追加"}
+        <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"6px 12px", fontSize:13, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>
+          {uploading ? "…" : "＋"}
         </button>
         <input ref={fileInputRef} type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={handleUpload} />
       </div>
 
       {/* Chart tabs */}
       {charts.length > 1 && (
-        <div style={{ background:"#243d33", padding:"6px 14px", display:"flex", gap:6, overflowX:"auto", flexShrink:0 }}>
+        <div style={{ background:"#243d33", padding:"5px 14px", display:"flex", gap:6, overflowX:"auto", flexShrink:0 }}>
           {charts.map((c, i) => (
             <button key={i} onClick={() => setActiveIdx(i)} style={{
               background: i===activeIdx ? "#B8924A" : "transparent",
               border: `1px solid ${i===activeIdx ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
               color: i===activeIdx ? "#2D4A3E" : "rgba(245,238,221,0.7)",
-              borderRadius:16, padding:"4px 12px", fontSize:12, cursor:"pointer",
+              borderRadius:14, padding:"3px 10px", fontSize:12, cursor:"pointer",
               fontFamily:"sans-serif", whiteSpace:"nowrap", fontWeight: i===activeIdx ? "bold" : "normal"
             }}>{c.name || `編み図 ${i+1}`}</button>
           ))}
         </div>
       )}
 
-      {/* Main area: canvas + right toolbar */}
-      <div style={{ flex:1, display:"flex", overflow:"hidden", position:"relative" }}>
+      {/* Main: canvas + right toolbar */}
+      <div style={{ flex:1, display:"flex", overflow:"hidden" }}>
 
-        {/* Scrollable canvas area */}
-        <div ref={containerRef} style={{ flex:1, overflow:"auto", WebkitOverflowScrolling:"touch" }}>
+        {/* Scrollable area */}
+        <div ref={containerRef} style={{ flex:1, overflow:"auto", WebkitOverflowScrolling:"touch", position:"relative" }}>
           {charts.length === 0 ? (
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", color:"rgba(245,238,221,0.5)", fontFamily:"sans-serif", padding:32 }}>
-              <div style={{ fontSize:48, marginBottom:16 }}>📄</div>
-              <div style={{ fontSize:16, marginBottom:8 }}>編み図がまだありません</div>
-              <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"10px 20px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif", marginTop:8 }}>
-                ＋ 編み図を追加
-              </button>
+              <div style={{ fontSize:48, marginBottom:12 }}>📄</div>
+              <div style={{ marginBottom:8 }}>編み図がまだありません</div>
+              <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"10px 20px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif", marginTop:8 }}>＋ 追加</button>
             </div>
           ) : isPdf ? (
             <iframe src={activeChart.url} style={{ width:"100%", height:"100%", minHeight:"80vh", border:"none" }} />
           ) : (
-            <canvas
-              ref={canvasRef}
-              style={{ display:"block", width:"100%", touchAction:"pan-x pan-y pinch-zoom" }}
-              onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-              onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
-            />
+            // 2レイヤー構造
+            <div ref={wrapRef} style={{ position:"relative", width:"100%", display:"inline-block" }}>
+              {/* 背景：編み図画像 */}
+              <canvas ref={bgCanvasRef} style={{ display:"block", width:"100%" }} />
+              {/* 書き込みレイヤー */}
+              <canvas
+                ref={drawCanvasRef}
+                style={{ position:"absolute", top:0, left:0, width:"100%", height:"100%",
+                  touchAction: tool === "pen" || tool === "eraser" ? "none" : "pan-x pan-y pinch-zoom",
+                  cursor: tool==="eraser" ? "crosshair" : "default" }}
+                onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+                onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+              />
+              {/* 段マーカー */}
+              {showMarker && markerY !== null && (
+                <div style={{ position:"absolute", left:0, right:0, top:`${markerY}%`, zIndex:10, pointerEvents:"none" }}>
+                  {/* 半透明の帯 */}
+                  <div style={{ position:"absolute", left:0, right:0, top:-12, height:24, background:"rgba(184,146,74,0.25)", borderTop:"2px solid rgba(184,146,74,0.8)", borderBottom:"2px solid rgba(184,146,74,0.8)" }} />
+                  {/* ドラッグハンドル */}
+                  <div
+                    style={{ position:"absolute", right:0, top:-16, width:32, height:32, background:"#B8924A", borderRadius:"50% 0 0 50%", display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", pointerEvents:"auto", boxShadow:"-2px 0 8px rgba(0,0,0,0.3)" }}
+                    onMouseDown={startMarkerDrag}
+                    onTouchStart={startMarkerDrag}
+                  >
+                    <span style={{ color:"#fff", fontSize:14, userSelect:"none" }}>⇕</span>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
-        {/* Right toolbar (vertical) - 描画モードのみ */}
+        {/* Right toolbar */}
         {!isPdf && charts.length > 0 && (
-          <div style={{ width:56, background:"#2D4A3E", display:"flex", flexDirection:"column", alignItems:"center", padding:"12px 0", gap:12, flexShrink:0, overflowY:"auto" }}>
+          <div style={{ width:52, background:"#2D4A3E", display:"flex", flexDirection:"column", alignItems:"center", padding:"10px 0", gap:10, flexShrink:0, overflowY:"auto" }}>
 
             {/* Tools */}
-            {[["pen","✏️","ペン"],["ruler","📏","定規"],["eraser","⬜","消しゴム"]].map(([t, icon, label]) => (
+            {[["pen","✏️","ペン"],["eraser","🧹","消しゴム"]].map(([t, icon, label]) => (
               <button key={t} onClick={() => setTool(t)} title={label} style={{
                 background: tool===t ? "#B8924A" : "transparent",
                 border: `1px solid ${tool===t ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
-                color: "#F5EEDD",
-                borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
+                borderRadius:10, width:42, height:42, fontSize:20, cursor:"pointer",
                 display:"flex", alignItems:"center", justifyContent:"center",
               }}>{icon}</button>
             ))}
 
-            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)", margin:"4px 0" }} />
+            {/* 段マーカートグル */}
+            <button onClick={() => setShowMarker(m => !m)} title="段マーカー" style={{
+              background: showMarker ? "rgba(184,146,74,0.3)" : "transparent",
+              border: `1px solid ${showMarker ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
+              borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
+              display:"flex", alignItems:"center", justifyContent:"center",
+            }}>📍</button>
+
+            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
             {/* Colors */}
             {COLORS.map(cl => (
               <button key={cl} onClick={() => { setColor(cl); setTool("pen"); }} style={{
-                width:28, height:28, borderRadius:"50%", background:cl,
-                border: color===cl && tool!=="eraser" ? "3px solid #F5EEDD" : "2px solid rgba(255,255,255,0.25)",
+                width:26, height:26, borderRadius:"50%", background:cl,
+                border: color===cl && tool==="pen" ? "3px solid #F5EEDD" : "2px solid rgba(255,255,255,0.2)",
                 cursor:"pointer", flexShrink:0,
               }} />
             ))}
 
-            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)", margin:"4px 0" }} />
+            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
             {/* Line width */}
-            {[2,4,8].map(w => (
+            {[2,5,10].map(w => (
               <button key={w} onClick={() => setLineWidth(w)} style={{
                 background: lineWidth===w ? "#B8924A" : "transparent",
                 border: `1px solid ${lineWidth===w ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
-                borderRadius:8, width:42, height:30, cursor:"pointer",
+                borderRadius:8, width:42, height:28, cursor:"pointer",
                 display:"flex", alignItems:"center", justifyContent:"center",
               }}>
-                <div style={{ width: w===2?14:w===4?20:28, height:w, background:"#F5EEDD", borderRadius:w }} />
+                <div style={{ width:24, height:w===2?2:w===5?4:7, background:"#F5EEDD", borderRadius:4 }} />
               </button>
             ))}
 
-            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)", margin:"4px 0" }} />
+            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
-            {/* Delete */}
+            {/* Delete chart */}
             <button onClick={handleDelete} title="削除" style={{
-              background:"transparent", border:"1px solid rgba(244,164,164,0.4)",
-              color:"#f4a4a4", borderRadius:10, width:42, height:42, fontSize:16,
+              background:"transparent", border:"1px solid rgba(244,164,164,0.3)",
+              color:"#f4a4a4", borderRadius:10, width:42, height:42, fontSize:18,
               cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
             }}>🗑️</button>
           </div>
