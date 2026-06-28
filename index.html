@@ -143,7 +143,7 @@ const deleteChart = async (url) => {
 
 // ── Chart Viewer Component ────────────────────────────────────────────────────
 
-function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
+function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCount }) {
   const [activeIdx, setActiveIdx] = useState(0);
   const [tool, setTool] = useState(null);
   const [color, setColor] = useState("#C4837A");
@@ -396,8 +396,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
             </div>
           )}
 
-          {showMarker && !isPdf && charts.length > 0 && (
-            <div style={{ position:"absolute", left:0, right:0, top:`${markerY*100}%`, zIndex:20, pointerEvents:"none", transform:"translateY(-50%)" }}>
+          {showMarker && !isPdf && charts.length > 0 && (            <div style={{ position:"absolute", left:0, right:0, top:`${markerY*100}%`, zIndex:20, pointerEvents:"none", transform:"translateY(-50%)" }}>
               <div style={{ position:"absolute", left:0, right:0, top:`-${markerHeightPx/2}px`, height:`${markerHeightPx}px`, background:"rgba(184,146,74,0.3)", borderTop:"1.5px solid rgba(184,146,74,0.9)", borderBottom:"1.5px solid rgba(184,146,74,0.9)" }} />
               <div
                 style={{ position:"absolute", right:0, top:-18, width:36, height:36, background:"#B8924A", borderRadius:"50% 0 0 50%", display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", pointerEvents:"auto", boxShadow:"-2px 0 8px rgba(0,0,0,0.4)", touchAction:"none" }}
@@ -405,6 +404,24 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
               >
                 <span style={{ color:"#fff", fontSize:16, userSelect:"none" }}>⇕</span>
               </div>
+            </div>
+          )}
+
+          {/* フローティングカウンターバー */}
+          {section && onCount && (
+            <div style={{ position:"absolute", bottom:16, left:"50%", transform:"translateX(-50%)", zIndex:30, display:"flex", alignItems:"center", gap:0, background:"rgba(45,74,62,0.92)", borderRadius:16, boxShadow:"0 4px 20px rgba(0,0,0,0.5)", overflow:"hidden", backdropFilter:"blur(8px)" }}>
+              <div style={{ padding:"10px 16px", borderRight:"1px solid rgba(245,238,221,0.15)" }}>
+                <div style={{ color:"rgba(245,238,221,0.6)", fontSize:10, fontFamily:"sans-serif", marginBottom:2 }}>{section.name}</div>
+                <div style={{ color:"#F5EEDD", fontSize:22, fontWeight:"bold", lineHeight:1 }}>{section.rows}<span style={{ fontSize:12, marginLeft:4, opacity:0.7 }}>段</span></div>
+              </div>
+              <button
+                onClick={() => onCount(-1)}
+                style={{ background:"transparent", border:"none", color:"#F0D9D6", fontSize:24, padding:"0 18px", height:60, cursor:"pointer", borderRight:"1px solid rgba(245,238,221,0.15)" }}
+              >−</button>
+              <button
+                onClick={() => onCount(1)}
+                style={{ background:"transparent", border:"none", color:"#F5EEDD", fontSize:24, fontWeight:"bold", padding:"0 22px", height:60, cursor:"pointer" }}
+              >＋</button>
             </div>
           )}
         </div>
@@ -679,6 +696,8 @@ function App() {
           projectId={activeProject.id}
           onClose={() => setShowCharts(false)}
           onChartsChange={charts => updateActiveProject(p => ({ ...p, charts }))}
+          section={activeSection}
+          onCount={delta => updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows + delta) }))}
         />
       )}
 
