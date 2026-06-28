@@ -145,6 +145,7 @@ const deleteChart = async (url) => {
 
 function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   const [activeIdx, setActiveIdx] = useState(0);
+  const [mode, setMode] = useState("view"); // view | draw
   const [tool, setTool] = useState("pen");
   const [color, setColor] = useState("#C4837A");
   const [lineWidth, setLineWidth] = useState(3);
@@ -291,6 +292,13 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
         <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"6px 14px", fontSize:13, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>
           {uploading ? "…" : "＋ 追加"}
         </button>
+        <button onClick={() => setMode(m => m==="view" ? "draw" : "view")} style={{
+          background: mode==="draw" ? "#C4837A" : "rgba(245,238,221,0.15)",
+          border: `1px solid ${mode==="draw" ? "#C4837A" : "rgba(245,238,221,0.3)"}`,
+          color: "#F5EEDD", borderRadius:8, padding:"6px 12px", fontSize:13,
+          fontWeight: mode==="draw" ? "bold" : "normal",
+          cursor:"pointer", fontFamily:"sans-serif", whiteSpace:"nowrap"
+        }}>{mode==="draw" ? "✏️ 描画中" : "👁 閲覧中"}</button>
         <input ref={fileInputRef} type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={handleUpload} />
       </div>
 
@@ -327,15 +335,20 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
           ) : (
             <canvas
               ref={canvasRef}
-              style={{ display:"block", width:"100%", touchAction:"pan-x pan-y" }}
-              onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-              onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+              style={{ display:"block", width:"100%", touchAction: mode==="draw" ? "none" : "pan-x pan-y pinch-zoom" }}
+              onMouseDown={mode==="draw" ? startDraw : null}
+              onMouseMove={mode==="draw" ? draw : null}
+              onMouseUp={mode==="draw" ? endDraw : null}
+              onMouseLeave={mode==="draw" ? endDraw : null}
+              onTouchStart={mode==="draw" ? startDraw : null}
+              onTouchMove={mode==="draw" ? draw : null}
+              onTouchEnd={mode==="draw" ? endDraw : null}
             />
           )}
         </div>
 
-        {/* Right toolbar (vertical) */}
-        {!isPdf && charts.length > 0 && (
+        {/* Right toolbar (vertical) - 描画モードのみ */}
+        {mode==="draw" && !isPdf && charts.length > 0 && (
           <div style={{ width:56, background:"#2D4A3E", display:"flex", flexDirection:"column", alignItems:"center", padding:"12px 0", gap:12, flexShrink:0, overflowY:"auto" }}>
 
             {/* Tools */}
