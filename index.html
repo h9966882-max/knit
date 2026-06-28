@@ -145,34 +145,34 @@ const deleteChart = async (url) => {
 
 function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   const [activeIdx, setActiveIdx] = useState(0);
-  const [tool, setTool] = useState("pen"); // pen | eraser | ruler
+  const [tool, setTool] = useState("pen");
   const [color, setColor] = useState("#C4837A");
   const [lineWidth, setLineWidth] = useState(3);
   const [uploading, setUploading] = useState(false);
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const drawing = useRef(false);
   const lastPos = useRef(null);
   const rulerStart = useRef(null);
   const snapshotRef = useRef(null);
   const fileInputRef = useRef(null);
+  const imgRef = useRef(null);
 
   const activeChart = charts[activeIdx];
 
-  // Draw image on canvas
   useEffect(() => {
     if (!activeChart || !canvasRef.current) return;
+    const isPdf = activeChart.url?.toLowerCase().includes(".pdf");
+    if (isPdf) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    const isPdf = activeChart.url.toLowerCase().includes(".pdf");
-    if (isPdf) return; // PDF handled by iframe
-
     const img = new Image();
     img.crossOrigin = "anonymous";
+    imgRef.current = img;
     img.onload = () => {
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       ctx.drawImage(img, 0, 0);
-      // Restore annotations
       if (activeChart.annotation) {
         const ann = new Image();
         ann.onload = () => ctx.drawImage(ann, 0, 0);
@@ -194,6 +194,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   };
 
   const startDraw = (e) => {
+    if (e.touches && e.touches.length > 1) return; // ピンチ中は描かない
     e.preventDefault();
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
@@ -207,12 +208,12 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   };
 
   const draw = (e) => {
+    if (e.touches && e.touches.length > 1) return;
     e.preventDefault();
     if (!drawing.current) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     const pos = getPos(e, canvas);
-
     if (tool === "ruler") {
       ctx.putImageData(snapshotRef.current, 0, 0);
       ctx.beginPath();
@@ -226,14 +227,15 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
       ctx.beginPath();
       ctx.moveTo(lastPos.current.x, lastPos.current.y);
       ctx.lineTo(pos.x, pos.y);
-      ctx.strokeStyle = tool === "eraser" ? null : color;
-      ctx.lineWidth = tool === "eraser" ? lineWidth * 6 : lineWidth;
+      ctx.lineWidth = tool === "eraser" ? lineWidth * 8 : lineWidth;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       if (tool === "eraser") {
         ctx.globalCompositeOperation = "destination-out";
+        ctx.strokeStyle = "rgba(0,0,0,1)";
       } else {
         ctx.globalCompositeOperation = "source-over";
+        ctx.strokeStyle = color;
       }
       ctx.stroke();
       ctx.globalCompositeOperation = "source-over";
@@ -241,10 +243,9 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
     }
   };
 
-  const endDraw = (e) => {
+  const endDraw = () => {
     if (!drawing.current) return;
     drawing.current = false;
-    // Save annotation
     const canvas = canvasRef.current;
     const annotation = canvas.toDataURL("image/png");
     const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation } : c);
@@ -264,6 +265,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
       alert("アップロードに失敗しました: " + err.message);
     }
     setUploading(false);
+    e.target.value = "";
   };
 
   const handleDelete = async () => {
@@ -275,23 +277,25 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
   };
 
   const isPdf = activeChart?.url?.toLowerCase().includes(".pdf");
+  const COLORS = ["#C4837A","#2D4A3E","#B8924A","#4488ff","#000000","#ffffff"];
 
   return (
     <div style={{ position:"fixed", inset:0, background:"#1a1a1a", zIndex:200, display:"flex", flexDirection:"column" }}>
+
       {/* Top bar */}
-      <div style={{ background:"#2D4A3E", padding:"10px 14px", display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+      <div style={{ background:"#2D4A3E", padding:"10px 14px", display:"flex", alignItems:"center", gap:8, flexShrink:0, zIndex:10 }}>
         <button onClick={onClose} style={{ background:"transparent", border:"none", color:"#F5EEDD", fontSize:22, cursor:"pointer", padding:"0 4px" }}>←</button>
         <span style={{ color:"#F5EEDD", fontSize:15, fontWeight:"bold", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
           {activeChart?.name || "編み図"}
         </span>
-        <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"6px 12px", fontSize:13, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>
+        <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"6px 14px", fontSize:13, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>
           {uploading ? "…" : "＋ 追加"}
         </button>
         <input ref={fileInputRef} type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={handleUpload} />
       </div>
 
       {/* Chart tabs */}
-      {charts.length > 0 && (
+      {charts.length > 1 && (
         <div style={{ background:"#243d33", padding:"6px 14px", display:"flex", gap:6, overflowX:"auto", flexShrink:0 }}>
           {charts.map((c, i) => (
             <button key={i} onClick={() => setActiveIdx(i)} style={{
@@ -305,53 +309,82 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange }) {
         </div>
       )}
 
-      {/* Canvas / PDF area */}
-      <div style={{ flex:1, overflow:"auto", position:"relative" }}>
-        {charts.length === 0 ? (
-          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", color:"rgba(245,238,221,0.5)", fontFamily:"sans-serif" }}>
-            <div style={{ fontSize:48, marginBottom:16 }}>📄</div>
-            <div style={{ fontSize:16, marginBottom:8 }}>編み図がまだありません</div>
-            <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"10px 20px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif", marginTop:8 }}>
-              ＋ 編み図を追加
-            </button>
-          </div>
-        ) : isPdf ? (
-          <iframe src={activeChart.url} style={{ width:"100%", height:"100%", border:"none" }} />
-        ) : (
-          <canvas
-            ref={canvasRef}
-            style={{ display:"block", maxWidth:"100%", touchAction:"none" }}
-            onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-            onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
-          />
-        )}
-      </div>
+      {/* Main area: canvas + right toolbar */}
+      <div style={{ flex:1, display:"flex", overflow:"hidden", position:"relative" }}>
 
-      {/* Tool bar */}
-      {!isPdf && charts.length > 0 && (
-        <div style={{ background:"#2D4A3E", padding:"10px 14px", display:"flex", alignItems:"center", gap:8, flexShrink:0, flexWrap:"wrap" }}>
-          {[["pen","✏️ ペン"],["ruler","📏 定規"],["eraser","⬜ 消しゴム"]].map(([t, label]) => (
-            <button key={t} onClick={() => setTool(t)} style={{
-              background: tool===t ? "#B8924A" : "transparent",
-              border: `1px solid ${tool===t ? "#B8924A" : "rgba(245,238,221,0.4)"}`,
-              color: tool===t ? "#2D4A3E" : "#F5EEDD",
-              borderRadius:20, padding:"6px 12px", fontSize:13, cursor:"pointer",
-              fontFamily:"sans-serif", fontWeight: tool===t ? "bold" : "normal"
-            }}>{label}</button>
-          ))}
-          <div style={{ display:"flex", alignItems:"center", gap:6, marginLeft:"auto" }}>
-            {["#C4837A","#2D4A3E","#B8924A","#4488ff","#000000"].map(cl => (
-              <button key={cl} onClick={() => setColor(cl)} style={{
-                width:22, height:22, borderRadius:"50%", background:cl, border: color===cl ? "3px solid white" : "2px solid rgba(255,255,255,0.3)", cursor:"pointer"
+        {/* Scrollable canvas area */}
+        <div ref={containerRef} style={{ flex:1, overflow:"auto", WebkitOverflowScrolling:"touch" }}>
+          {charts.length === 0 ? (
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", color:"rgba(245,238,221,0.5)", fontFamily:"sans-serif", padding:32 }}>
+              <div style={{ fontSize:48, marginBottom:16 }}>📄</div>
+              <div style={{ fontSize:16, marginBottom:8 }}>編み図がまだありません</div>
+              <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"10px 20px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif", marginTop:8 }}>
+                ＋ 編み図を追加
+              </button>
+            </div>
+          ) : isPdf ? (
+            <iframe src={activeChart.url} style={{ width:"100%", height:"100%", minHeight:"80vh", border:"none" }} />
+          ) : (
+            <canvas
+              ref={canvasRef}
+              style={{ display:"block", width:"100%", touchAction:"pan-x pan-y" }}
+              onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+              onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+            />
+          )}
+        </div>
+
+        {/* Right toolbar (vertical) */}
+        {!isPdf && charts.length > 0 && (
+          <div style={{ width:56, background:"#2D4A3E", display:"flex", flexDirection:"column", alignItems:"center", padding:"12px 0", gap:12, flexShrink:0, overflowY:"auto" }}>
+
+            {/* Tools */}
+            {[["pen","✏️","ペン"],["ruler","📏","定規"],["eraser","⬜","消しゴム"]].map(([t, icon, label]) => (
+              <button key={t} onClick={() => setTool(t)} title={label} style={{
+                background: tool===t ? "#B8924A" : "transparent",
+                border: `1px solid ${tool===t ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
+                color: "#F5EEDD",
+                borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center",
+              }}>{icon}</button>
+            ))}
+
+            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)", margin:"4px 0" }} />
+
+            {/* Colors */}
+            {COLORS.map(cl => (
+              <button key={cl} onClick={() => { setColor(cl); setTool("pen"); }} style={{
+                width:28, height:28, borderRadius:"50%", background:cl,
+                border: color===cl && tool!=="eraser" ? "3px solid #F5EEDD" : "2px solid rgba(255,255,255,0.25)",
+                cursor:"pointer", flexShrink:0,
               }} />
             ))}
+
+            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)", margin:"4px 0" }} />
+
+            {/* Line width */}
+            {[2,4,8].map(w => (
+              <button key={w} onClick={() => setLineWidth(w)} style={{
+                background: lineWidth===w ? "#B8924A" : "transparent",
+                border: `1px solid ${lineWidth===w ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
+                borderRadius:8, width:42, height:30, cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center",
+              }}>
+                <div style={{ width: w===2?14:w===4?20:28, height:w, background:"#F5EEDD", borderRadius:w }} />
+              </button>
+            ))}
+
+            <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)", margin:"4px 0" }} />
+
+            {/* Delete */}
+            <button onClick={handleDelete} title="削除" style={{
+              background:"transparent", border:"1px solid rgba(244,164,164,0.4)",
+              color:"#f4a4a4", borderRadius:10, width:42, height:42, fontSize:16,
+              cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+            }}>🗑️</button>
           </div>
-          <input type="range" min={1} max={12} value={lineWidth}
-            onChange={e => setLineWidth(Number(e.target.value))}
-            style={{ width:60 }} />
-          <button onClick={handleDelete} style={{ background:"transparent", border:"none", color:"#f4a4a4", fontSize:13, cursor:"pointer", fontFamily:"sans-serif", marginLeft:4 }}>削除</button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
