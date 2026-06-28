@@ -84,8 +84,12 @@ const loadFromSupabase = async () => {
 
 const saveToSupabase = async (projects, activeProjectId) => {
   try {
-    await sbFetch("PATCH", { data: { projects, activeProjectId }, updated_at: new Date().toISOString() });
-  } catch {}
+    const res = await sbFetch("PATCH", { data: { projects, activeProjectId }, updated_at: new Date().toISOString() });
+    const text = await res.text();
+    console.log("Supabase PATCH status:", res.status, text);
+  } catch(e) {
+    console.error("Supabase save error:", e);
+  }
 };
 
 // ローカルストレージ（移行用）
