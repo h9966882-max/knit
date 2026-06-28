@@ -462,30 +462,37 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
   const activeChart = charts[activeIdx];
 
   useEffect(() => {
-    if (!activeChart || !bgCanvasRef.current) return;
+    if (!activeChart) return;
     if (activeChart.url?.toLowerCase().includes(".pdf")) return;
+
     const bg = bgCanvasRef.current;
-    const ctx = bg.getContext("2d");
+    const dc = drawCanvasRef.current;
+    if (!bg || !dc) return;
+
+    bg.width = 1; bg.height = 1;
+    dc.width = 1; dc.height = 1;
+    historyRef.current = [];
+
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
       bg.width = img.naturalWidth;
       bg.height = img.naturalHeight;
-      ctx.drawImage(img, 0, 0);
-      const dc = drawCanvasRef.current;
-      if (dc) {
-        dc.width = img.naturalWidth;
-        dc.height = img.naturalHeight;
-        if (activeChart.annotation) {
-          const ann = new Image();
-          ann.onload = () => { dc.getContext("2d").drawImage(ann, 0, 0); };
-          ann.src = activeChart.annotation;
-        }
+      bg.getContext("2d").drawImage(img, 0, 0);
+      dc.width = img.naturalWidth;
+      dc.height = img.naturalHeight;
+      if (activeChart.annotation) {
+        const ann = new Image();
+        ann.crossOrigin = "anonymous";
+        ann.onload = () => { dc.getContext("2d").drawImage(ann, 0, 0); };
+        ann.onerror = () => {};
+        ann.src = activeChart.annotation;
       }
       setScale(1); setOffset({ x: 0, y: 0 });
     };
+    img.onerror = () => { console.error("画像読み込み失敗:", activeChart.url); };
     img.src = activeChart.url;
-  }, [activeIdx]);
+  }, [activeIdx, activeChart?.url]);
 
   const getCanvasPos = (clientX, clientY) => {
     const dc = drawCanvasRef.current;
@@ -549,65 +556,102 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     ctx.globalCompositeOperation = "source-over";
   };
 
-  const onTouchStart = (e) => {
-    if (e.touches.length === 2) {
-      const t0 = e.touches[0], t1 = e.touches[1];
-      pinch.current = { startDist: Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY), startScale: scale };
-      drawing.current = false; return;
-    }
-    if (tool === "pen" || tool === "eraser") {
-      e.preventDefault();
+  // toolをrefで管理（イベントリスナー内で最新値を取得するため）
+  const toolRef = useRef(tool);
+  useEffect(() => { toolRef.current = tool; }, [tool]);
+  const scaleRef = useRef(scale);
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  const offsetRef = useRef(offset);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
+
+  // iOSでpassive:falseが必要なのでuseEffectで直接登録
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const handleTouchStart = (e) => {
+      if (e.touches.length === 2) {
+        const t0 = e.touches[0], t1 = e.touches[1];
+        pinch.current = { startDist: Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY), startScale: scaleRef.current };
+        drawing.current = false; return;
+      }
       const t = e.touches[0];
-      const pos = getCanvasPos(t.clientX, t.clientY);
+      const ct = toolRef.current;
+      if (ct === "pen" || ct === "eraser") {
+        e.preventDefault();
+        const pos = getCanvasPos(t.clientX, t.clientY);
+        if (!pos) return;
+        pushHistory();
+        drawing.current = true; lastPos.current = pos;
+      } else {
+        panStart.current = { clientX: t.clientX, clientY: t.clientY, ox: offsetRef.current.x, oy: offsetRef.current.y };
+      }
+    };
+
+    const handleTouchMove = (e) => {
+      if (e.touches.length === 2 && pinch.current) {
+        e.preventDefault();
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const dist = Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY);
+        setScale(Math.max(0.5, Math.min(8, pinch.current.startScale * dist / pinch.current.startDist)));
+        return;
+      }
+      const ct = toolRef.current;
+      if ((ct === "pen" || ct === "eraser") && drawing.current) {
+        e.preventDefault();
+        const pos = getCanvasPos(e.touches[0].clientX, e.touches[0].clientY);
+        if (!pos) return;
+        doDraw(pos); lastPos.current = pos;
+      } else if (panStart.current && !ct) {
+        e.preventDefault();
+        const t = e.touches[0];
+        setOffset({ x: panStart.current.ox + t.clientX - panStart.current.clientX, y: panStart.current.oy + t.clientY - panStart.current.clientY });
+      }
+    };
+
+    const handleTouchEnd = () => {
+      pinch.current = null; panStart.current = null;
+      if (drawing.current) { drawing.current = false; saveAnnotation(); }
+    };
+
+    const handleMouseDown = (e) => {
+      const ct = toolRef.current;
+      if (ct !== "pen" && ct !== "eraser") return;
+      const pos = getCanvasPos(e.clientX, e.clientY);
       if (!pos) return;
       pushHistory();
       drawing.current = true; lastPos.current = pos;
-    } else {
-      const t = e.touches[0];
-      panStart.current = { clientX: t.clientX, clientY: t.clientY, ox: offset.x, oy: offset.y };
-    }
-  };
-
-  const onTouchMove = (e) => {
-    if (e.touches.length === 2 && pinch.current) {
-      e.preventDefault();
-      const t0 = e.touches[0], t1 = e.touches[1];
-      const dist = Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY);
-      setScale(Math.max(0.5, Math.min(8, pinch.current.startScale * dist / pinch.current.startDist)));
-      return;
-    }
-    if ((tool === "pen" || tool === "eraser") && drawing.current) {
-      e.preventDefault();
-      const t = e.touches[0];
-      const pos = getCanvasPos(t.clientX, t.clientY);
+    };
+    const handleMouseMove = (e) => {
+      if (!drawing.current) return;
+      const pos = getCanvasPos(e.clientX, e.clientY);
       if (!pos) return;
       doDraw(pos); lastPos.current = pos;
-    } else if (panStart.current && !tool) {
-      e.preventDefault();
-      const t = e.touches[0];
-      setOffset({ x: panStart.current.ox + t.clientX - panStart.current.clientX, y: panStart.current.oy + t.clientY - panStart.current.clientY });
-    }
-  };
+    };
+    const handleMouseUp = () => { if (drawing.current) { drawing.current = false; saveAnnotation(); } };
 
-  const onTouchEnd = () => {
-    pinch.current = null; panStart.current = null;
-    if (drawing.current) { drawing.current = false; saveAnnotation(); }
-  };
+    vp.addEventListener("touchstart", handleTouchStart, { passive: false });
+    vp.addEventListener("touchmove", handleTouchMove, { passive: false });
+    vp.addEventListener("touchend", handleTouchEnd);
+    vp.addEventListener("mousedown", handleMouseDown);
+    vp.addEventListener("mousemove", handleMouseMove);
+    vp.addEventListener("mouseup", handleMouseUp);
+    vp.addEventListener("mouseleave", handleMouseUp);
 
-  const onMouseDown = (e) => {
-    if (tool !== "pen" && tool !== "eraser") return;
-    const pos = getCanvasPos(e.clientX, e.clientY);
-    if (!pos) return;
-    pushHistory();
-    drawing.current = true; lastPos.current = pos;
-  };
-  const onMouseMove = (e) => {
-    if (!drawing.current) return;
-    const pos = getCanvasPos(e.clientX, e.clientY);
-    if (!pos) return;
-    doDraw(pos); lastPos.current = pos;
-  };
-  const onMouseUp = () => { if (drawing.current) { drawing.current = false; saveAnnotation(); } };
+    return () => {
+      vp.removeEventListener("touchstart", handleTouchStart);
+      vp.removeEventListener("touchmove", handleTouchMove);
+      vp.removeEventListener("touchend", handleTouchEnd);
+      vp.removeEventListener("mousedown", handleMouseDown);
+      vp.removeEventListener("mousemove", handleMouseMove);
+      vp.removeEventListener("mouseup", handleMouseUp);
+      vp.removeEventListener("mouseleave", handleMouseUp);
+    };
+  }, []);
+
+  // Reactイベントは使わない（useEffectで登録済み）
+  const onTouchStart = undefined, onTouchMove = undefined, onTouchEnd = undefined;
+  const onMouseDown = undefined, onMouseMove = undefined, onMouseUp = undefined;
 
   const drawMarkerLine = () => {
     const dc = drawCanvasRef.current;
