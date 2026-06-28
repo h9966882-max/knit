@@ -165,6 +165,18 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
   const pinch = useRef(null);
   const panStart = useRef(null);
 
+  const [toast, setToast] = useState(null);
+  const prevSectionIdRef = useRef(null);
+
+  useEffect(() => {
+    if (!section) return;
+    if (prevSectionIdRef.current && prevSectionIdRef.current !== section.id) {
+      setToast(`✓ 次の工程へ：${section.name}`);
+      setTimeout(() => setToast(null), 2500);
+    }
+    prevSectionIdRef.current = section.id;
+  }, [section?.id]);
+
   const activeChart = charts[activeIdx];
 
   useEffect(() => {
@@ -449,6 +461,13 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
               >
                 <span style={{ color:"#fff", fontSize:16, userSelect:"none" }}>⇕</span>
               </div>
+            </div>
+          )}
+
+          {/* 工程切り替えトースト */}
+          {toast && (
+            <div style={{ position:"absolute", top:16, left:"50%", transform:"translateX(-50%)", zIndex:40, background:"rgba(45,74,62,0.95)", color:"#F5EEDD", borderRadius:12, padding:"10px 20px", fontSize:14, fontFamily:"sans-serif", whiteSpace:"nowrap", boxShadow:"0 4px 16px rgba(0,0,0,0.4)", pointerEvents:"none" }}>
+              {toast}
             </div>
           )}
 
@@ -764,7 +783,32 @@ function App() {
           onClose={() => setShowCharts(false)}
           onChartsChange={charts => updateActiveProject(p => ({ ...p, charts }))}
           section={activeSection}
-          onCount={delta => updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows + delta) }))}
+          onCount={delta => {
+            if (delta <= 0) {
+              updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows + delta) }));
+              return;
+            }
+            // ＋の時、目標段数チェック＆次の工程へ自動切り替え
+            updateActiveProject(p => {
+              const sIdx = p.sections.findIndex(s => s.id === p.activeSectionId);
+              const s = p.sections[sIdx];
+              const newRows = s.rows + 1;
+              const target = s.targetRows ? parseInt(s.targetRows) : null;
+              const reached = target && newRows >= target;
+              // 次の未完了工程を探す
+              const nextSection = reached
+                ? p.sections.slice(sIdx + 1).find(ns => !ns.done)
+                : null;
+              return {
+                ...p,
+                activeSectionId: nextSection ? nextSection.id : p.activeSectionId,
+                sections: p.sections.map((s2, i) => {
+                  if (i === sIdx) return { ...s2, rows: newRows, done: reached ? true : s2.done };
+                  return s2;
+                }),
+              };
+            });
+          }}
         />
       )}
 
