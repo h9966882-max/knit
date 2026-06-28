@@ -7,7 +7,7 @@
 <link rel="manifest" href="./manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="編み物">
+<meta name="apple-mobile-web-app-title" content="Knitting Journal">
 <link rel="apple-touch-icon" href="./icon-192.png">
 <meta name="theme-color" content="#2D4A3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -24,7 +24,7 @@
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
@@ -90,7 +90,14 @@ const saveToSupabase = async (projects, activeProjectId) => {
     );
     const json = await res.json();
     console.log("save result:", res.status, JSON.stringify(json).slice(0, 100));
-  } catch(e) { console.error("save error:", e); }
+    // 画面にステータス表示（デバッグ用）
+    const el = document.getElementById("__debug");
+    if (el) el.textContent = `保存: ${res.status} / ${new Date().toLocaleTimeString("ja-JP")}`;
+  } catch(e) {
+    console.error("save error:", e);
+    const el = document.getElementById("__debug");
+    if (el) el.textContent = `エラー: ${e.message}`;
+  }
 };
 
 // ローカルストレージ（移行用）
@@ -175,7 +182,7 @@ function App() {
   }, []);
 
   // データ変更時にSupabaseへ保存
-  const saveRef = React.useRef(null);
+  const saveRef = useRef(null);
   useEffect(() => {
     if (projects.length === 0 || syncStatus === "loading") return;
     if (saveRef.current) clearTimeout(saveRef.current);
@@ -314,6 +321,7 @@ function App() {
       </header>
 
       <main style={{ maxWidth:480, margin:"0 auto", padding:"16px 14px 60px" }}>
+        <div id="__debug" style={{ fontFamily:"sans-serif", fontSize:11, color:C.textLight, textAlign:"center", marginBottom:8 }}></div>
         {syncStatus === "loading" && (
           <div style={{ textAlign:"center", padding:"60px 0", color:C.textLight, fontFamily:"sans-serif" }}>
             <div style={{ fontSize:32, marginBottom:12 }}>🧶</div>
