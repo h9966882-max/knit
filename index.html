@@ -26,6 +26,88 @@
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
+// ── Supabase ──────────────────────────────────────────────────────────────────
+
+const SUPABASE_URL = "https://cvlqufhuwiswretosfuj.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2bHF1Zmh1d2lzd3JldG9zZnVqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2MjEzMzIsImV4cCI6MjA5ODE5NzMzMn0.ag0coPnNA2O5trTp-rckUWkqfwJMNZHH_4E-29IEZf0";
+
+// 認証トークンを含むヘッダーを動的に生成
+const getHeaders = (token) => ({
+  "apikey": SUPABASE_ANON_KEY,
+  "Authorization": `Bearer ${token || SUPABASE_ANON_KEY}`,
+  "Content-Type": "application/json",
+});
+
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+
+const authSignUp = async (email, password) => {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  return res.json();
+};
+
+const authSignIn = async (email, password) => {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  return res.json();
+};
+
+const authSignOut = async (token) => {
+  await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+    method: "POST",
+    headers: getHeaders(token),
+  });
+};
+
+const authRefresh = async (refreshToken) => {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  return res.json();
+};
+
+// セッション保存
+const SESSION_KEY = "kj_session";
+const saveSession = (session) => {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch {}
+};
+const loadSession = () => {
+  try { const s = localStorage.getItem(SESSION_KEY); return s ? JSON.parse(s) : null; } catch { return null; }
+};
+const clearSession = () => {
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+};
+
+// ── 招待コード確認 ────────────────────────────────────────────────────────────
+
+const checkInvitationCode = async (code) => {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/invitation_codes?code=eq.${encodeURIComponent(code)}&used=eq.false&select=id,code`,
+    { headers: getHeaders(null) }
+  );
+  const rows = await res.json();
+  return rows && rows.length > 0 ? rows[0] : null;
+};
+
+const markCodeUsed = async (codeId, userId, token) => {
+  await fetch(
+    `${SUPABASE_URL}/rest/v1/invitation_codes?id=eq.${codeId}`,
+    {
+      method: "PATCH",
+      headers: { ...getHeaders(token), "Prefer": "return=minimal" },
+      body: JSON.stringify({ used: true, used_by: userId, used_at: new Date().toISOString() }),
+    }
+  );
+};
+
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
 const newSection = (name = "新しい工程") => ({
@@ -50,22 +132,13 @@ const initProject = () => {
   };
 };
 
-// ── Supabase ──────────────────────────────────────────────────────────────────
+// ── Supabase data ─────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = "https://cvlqufhuwiswretosfuj.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2bHF1Zmh1d2lzd3JldG9zZnVqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2MjEzMzIsImV4cCI6MjA5ODE5NzMzMn0.ag0coPnNA2O5trTp-rckUWkqfwJMNZHH_4E-29IEZf0";
-
-const HEADERS = {
-  "apikey": SUPABASE_KEY,
-  "Authorization": `Bearer ${SUPABASE_KEY}`,
-  "Content-Type": "application/json",
-};
-
-const loadFromSupabase = async () => {
+const loadFromSupabase = async (token, userId) => {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/knitting_data?id=eq.default&select=data`,
-      { headers: HEADERS }
+      `${SUPABASE_URL}/rest/v1/knitting_data?user_id=eq.${userId}&select=data`,
+      { headers: getHeaders(token) }
     );
     const rows = await res.json();
     if (rows && rows.length > 0 && rows[0].data && rows[0].data.projects) {
@@ -75,39 +148,49 @@ const loadFromSupabase = async () => {
   return null;
 };
 
-const saveToSupabase = async (projects, activeProjectId) => {
-  try {
+const saveToSupabase = async (token, userId, projects, activeProjectId) => {
+  // まず既存行があるか確認
+  const checkRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/knitting_data?user_id=eq.${userId}&select=id`,
+    { headers: getHeaders(token) }
+  );
+  const existing = await checkRes.json();
+
+  const payload = {
+    data: { projects, activeProjectId },
+    updated_at: new Date().toISOString(),
+  };
+
+  if (existing && existing.length > 0) {
+    // 既存行をUPDATE
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/knitting_data?id=eq.default`,
+      `${SUPABASE_URL}/rest/v1/knitting_data?user_id=eq.${userId}`,
       {
         method: "PATCH",
-        headers: { ...HEADERS, "Prefer": "return=minimal" },
-        body: JSON.stringify({
-          data: { projects, activeProjectId },
-          updated_at: new Date().toISOString()
-        }),
+        headers: { ...getHeaders(token), "Prefer": "return=minimal" },
+        body: JSON.stringify(payload),
       }
     );
-    const el = document.getElementById("__sync");
-    if (el) el.textContent = res.ok ? `✓ 保存済 ${new Date().toLocaleTimeString("ja-JP")}` : `⚠ 保存エラー`;
-  } catch(e) {
-    const el = document.getElementById("__sync");
-    if (el) el.textContent = `⚠ 保存エラー`;
+    return res.ok;
+  } else {
+    // 新規INSERT
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/knitting_data`,
+      {
+        method: "POST",
+        headers: { ...getHeaders(token), "Prefer": "return=minimal" },
+        body: JSON.stringify({ ...payload, user_id: userId }),
+      }
+    );
+    return res.ok;
   }
 };
-
-// ローカルストレージ（移行用）
-const LOCAL_KEY = "knitting_v2";
-const loadLocal = () => {
-  try { const r = localStorage.getItem(LOCAL_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
-};
-const clearLocal = () => { try { localStorage.removeItem(LOCAL_KEY); } catch {} };
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 
 const BUCKET = "knitting-charts";
 
-const uploadChart = async (projectId, file) => {
+const uploadChart = async (token, projectId, file) => {
   const ext = file.name.split(".").pop();
   const path = `${projectId}/${Date.now()}.${ext}`;
   const res = await fetch(
@@ -115,8 +198,8 @@ const uploadChart = async (projectId, file) => {
     {
       method: "POST",
       headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${token}`,
         "Content-Type": file.type,
       },
       body: file,
@@ -126,34 +209,29 @@ const uploadChart = async (projectId, file) => {
   return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
 };
 
-const deleteChart = async (url) => {
+const deleteChart = async (token, url) => {
   const path = url.split(`/object/public/${BUCKET}/`)[1];
   if (!path) return;
   await fetch(
     `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`,
     {
       method: "DELETE",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-      },
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}` },
     }
   );
 };
 
-// annotation（書き込み）をStorageに保存してURLを返す
-const uploadAnnotation = async (projectId, chartIdx, base64DataUrl) => {
+const uploadAnnotation = async (token, projectId, chartIdx, base64DataUrl) => {
   const path = `${projectId}/annotation_${chartIdx}_${Date.now()}.png`;
-  // base64 → Blob変換
-  const res = await fetch(base64DataUrl);
-  const blob = await res.blob();
+  const res2 = await fetch(base64DataUrl);
+  const blob = await res2.blob();
   const uploadRes = await fetch(
     `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`,
     {
       method: "POST",
       headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${token}`,
         "Content-Type": "image/png",
       },
       body: blob,
@@ -163,26 +241,191 @@ const uploadAnnotation = async (projectId, chartIdx, base64DataUrl) => {
   return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
 };
 
-// 古いannotation URLを削除
-const deleteAnnotation = async (url) => {
-  if (!url || url.startsWith("data:")) return; // base64はスキップ
+const deleteAnnotation = async (token, url) => {
+  if (!url || url.startsWith("data:")) return;
   const path = url.split(`/object/public/${BUCKET}/`)[1];
   if (!path || !path.includes("annotation_")) return;
   await fetch(
     `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`,
     {
       method: "DELETE",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-      },
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${token}` },
     }
   ).catch(() => {});
 };
 
+// ── Colors ────────────────────────────────────────────────────────────────────
+
+const C = {
+  bg: "#F7F4EE", card: "#FDFBF7",
+  green: "#2D4A3E", rose: "#C4837A", rosePale: "#F0D9D6",
+  gold: "#B8924A", goldPale: "#F5EEDD",
+  text: "#2C2416", textMid: "#6B5F4E", textLight: "#9C8E7A",
+  border: "#DDD5C4",
+};
+
+// ── Auth Screen ───────────────────────────────────────────────────────────────
+
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState("login"); // "login" | "register"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const inputStyle = {
+    width: "100%",
+    background: C.bg,
+    border: `1px solid ${C.border}`,
+    borderRadius: 8,
+    padding: "12px 14px",
+    fontSize: 15,
+    color: C.text,
+  };
+
+  const labelStyle = {
+    display: "block",
+    fontSize: 11,
+    color: C.gold,
+    letterSpacing: "0.1em",
+    fontFamily: "sans-serif",
+    textTransform: "uppercase",
+    marginBottom: 6,
+    marginTop: 18,
+  };
+
+  const handleLogin = async () => {
+    if (!email || !password) { setError("メールアドレスとパスワードを入力してください"); return; }
+    setLoading(true); setError("");
+    try {
+      const data = await authSignIn(email, password);
+      if (data.error || !data.access_token) {
+        setError("メールアドレスまたはパスワードが違います");
+      } else {
+        const session = { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user };
+        saveSession(session);
+        onAuth(session);
+      }
+    } catch { setError("接続エラーが発生しました"); }
+    setLoading(false);
+  };
+
+  const handleRegister = async () => {
+    if (!email || !password || !inviteCode) { setError("すべての項目を入力してください"); return; }
+    if (password.length < 6) { setError("パスワードは6文字以上にしてください"); return; }
+    setLoading(true); setError("");
+    try {
+      // 招待コード確認
+      const codeRow = await checkInvitationCode(inviteCode.trim());
+      if (!codeRow) { setError("招待コードが無効または使用済みです"); setLoading(false); return; }
+
+      // アカウント作成
+      const data = await authSignUp(email, password);
+      if (data.error) { setError(data.error.message || "登録に失敗しました"); setLoading(false); return; }
+
+      // ログイン
+      const loginData = await authSignIn(email, password);
+      if (!loginData.access_token) { setError("登録後のログインに失敗しました"); setLoading(false); return; }
+
+      // 招待コードを使用済みに
+      await markCodeUsed(codeRow.id, loginData.user.id, loginData.access_token);
+
+      const session = { access_token: loginData.access_token, refresh_token: loginData.refresh_token, user: loginData.user };
+      saveSession(session);
+      onAuth(session);
+    } catch(e) { setError("エラーが発生しました: " + e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 20px" }}>
+      <div style={{ marginBottom: 32, textAlign: "center" }}>
+        <div style={{ fontSize: 40, marginBottom: 8 }}>🧶</div>
+        <div style={{ fontSize: 22, fontWeight: "bold", color: C.green, letterSpacing: "0.04em" }}>Knitting Journal</div>
+      </div>
+
+      <div style={{ width: "100%", maxWidth: 400, background: C.card, borderRadius: 16, border: `1px solid ${C.border}`, padding: "28px 24px", boxShadow: "0 4px 24px rgba(45,74,62,0.08)" }}>
+
+        {/* タブ */}
+        <div style={{ display: "flex", gap: 0, marginBottom: 24, background: C.bg, borderRadius: 10, padding: 4 }}>
+          {[["login", "ログイン"], ["register", "新規登録"]].map(([m, label]) => (
+            <button key={m} onClick={() => { setMode(m); setError(""); }} style={{
+              flex: 1, background: mode === m ? C.green : "transparent",
+              border: "none", color: mode === m ? "#F5EEDD" : C.textMid,
+              borderRadius: 8, padding: "9px 0", fontSize: 14,
+              fontWeight: mode === m ? "bold" : "normal",
+              cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.2s"
+            }}>{label}</button>
+          ))}
+        </div>
+
+        <label style={labelStyle}>メールアドレス</label>
+        <input
+          type="email"
+          style={inputStyle}
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          placeholder="example@email.com"
+          autoComplete="email"
+        />
+
+        <label style={labelStyle}>パスワード</label>
+        <input
+          type="password"
+          style={inputStyle}
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          placeholder={mode === "register" ? "6文字以上" : "パスワード"}
+          autoComplete={mode === "login" ? "current-password" : "new-password"}
+        />
+
+        {mode === "register" && (<>
+          <label style={labelStyle}>招待コード</label>
+          <input
+            type="text"
+            style={inputStyle}
+            value={inviteCode}
+            onChange={e => setInviteCode(e.target.value)}
+            placeholder="招待コードを入力"
+            autoComplete="off"
+          />
+        </>)}
+
+        {error && (
+          <div style={{ marginTop: 14, background: "#FDF0EE", border: `1px solid ${C.rose}`, borderRadius: 8, padding: "10px 14px", fontSize: 13, color: C.rose, fontFamily: "sans-serif" }}>
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={mode === "login" ? handleLogin : handleRegister}
+          disabled={loading}
+          style={{
+            width: "100%", marginTop: 24,
+            background: loading ? C.textLight : C.green,
+            border: "none", color: "#F5EEDD",
+            borderRadius: 10, padding: "14px 0",
+            fontSize: 16, fontWeight: "bold",
+            cursor: loading ? "not-allowed" : "pointer",
+            fontFamily: "sans-serif", letterSpacing: "0.05em",
+            transition: "background 0.2s"
+          }}
+        >
+          {loading ? "処理中…" : mode === "login" ? "ログイン" : "登録する"}
+        </button>
+      </div>
+
+      <div style={{ marginTop: 20, fontSize: 12, color: C.textLight, fontFamily: "sans-serif", textAlign: "center" }}>
+        新規登録には招待コードが必要です
+      </div>
+    </div>
+  );
+}
+
 // ── Chart Viewer Component ────────────────────────────────────────────────────
 
-function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCount }) {
+function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCount, token }) {
   const [activeIdx, setActiveIdx] = useState(0);
   const [tool, setTool] = useState(null);
   const [color, setColor] = useState("#C4837A");
@@ -254,7 +497,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     };
   };
 
-  const historyRef = useRef([]); // Undo履歴（ImageData）
+  const historyRef = useRef([]);
   const MAX_HISTORY = 20;
 
   const pushHistory = () => {
@@ -280,17 +523,14 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
       if (!dc) return;
       const base64 = dc.toDataURL("image/png");
       try {
-        // 古いannotationがStorageにあれば削除
         const oldAnnotation = charts[activeIdx]?.annotation;
         if (oldAnnotation && !oldAnnotation.startsWith("data:")) {
-          deleteAnnotation(oldAnnotation);
+          deleteAnnotation(token, oldAnnotation);
         }
-        // Storageにアップロード
-        const annotationUrl = await uploadAnnotation(projectId, activeIdx, base64);
+        const annotationUrl = await uploadAnnotation(token, projectId, activeIdx, base64);
         const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation: annotationUrl } : c);
         onChartsChange(updated);
       } catch(e) {
-        // Storageへの保存に失敗したらbase64でフォールバック
         console.warn("Annotation storage failed, using base64:", e);
         const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation: base64 } : c);
         onChartsChange(updated);
@@ -379,12 +619,10 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
   };
   const onMouseUp = () => { if (drawing.current) { drawing.current = false; saveAnnotation(); } };
 
-  // 段マーカー位置に水平線を描く
   const drawMarkerLine = () => {
     const dc = drawCanvasRef.current;
     const vp = viewportRef.current;
     if (!dc || !vp) return;
-    // viewport内でのマーカーのY位置をcanvas座標に変換
     const vpRect = vp.getBoundingClientRect();
     const markerClientY = vpRect.top + markerY * vpRect.height;
     const dcRect = dc.getBoundingClientRect();
@@ -433,7 +671,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     if (!file) return;
     setUploading(true);
     try {
-      const url = await uploadChart(projectId, file);
+      const url = await uploadChart(token, projectId, file);
       const updated = [...charts, { url, name: file.name, annotation: null }];
       onChartsChange(updated); setActiveIdx(updated.length - 1);
     } catch(err) { alert("アップロードに失敗しました: " + err.message); }
@@ -442,7 +680,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
 
   const handleDelete = async () => {
     if (!window.confirm("この編み図を削除しますか？")) return;
-    await deleteChart(activeChart.url);
+    await deleteChart(token, activeChart.url);
     const updated = charts.filter((_, i) => i !== activeIdx);
     onChartsChange(updated);
     setActiveIdx(Math.max(0, activeIdx - 1));
@@ -454,7 +692,6 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
 
   return (
     <div style={{ position:"fixed", inset:0, background:"#1a1a1a", zIndex:200, display:"flex", flexDirection:"column" }}>
-
       <div style={{ background:"#2D4A3E", padding:"10px 14px", display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
         <button onClick={onClose} style={{ background:"transparent", border:"none", color:"#F5EEDD", fontSize:22, cursor:"pointer", padding:"0 4px" }}>←</button>
         <span style={{ color:"#F5EEDD", fontSize:14, fontWeight:"bold", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
@@ -484,7 +721,6 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
       )}
 
       <div style={{ flex:1, display:"flex", overflow:"hidden" }}>
-
         <div ref={viewportRef} style={{ flex:1, overflow:"hidden", position:"relative", background:"#111", touchAction:"none" }}
           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
           onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
@@ -506,7 +742,8 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
             </div>
           )}
 
-          {showMarker && !isPdf && charts.length > 0 && (            <div style={{ position:"absolute", left:0, right:0, top:`${markerY*100}%`, zIndex:20, pointerEvents:"none", transform:"translateY(-50%)" }}>
+          {showMarker && !isPdf && charts.length > 0 && (
+            <div style={{ position:"absolute", left:0, right:0, top:`${markerY*100}%`, zIndex:20, pointerEvents:"none", transform:"translateY(-50%)" }}>
               <div style={{ position:"absolute", left:0, right:0, top:`-${markerHeightPx/2}px`, height:`${markerHeightPx}px`, background:"rgba(184,146,74,0.3)", borderTop:"1.5px solid rgba(184,146,74,0.9)", borderBottom:"1.5px solid rgba(184,146,74,0.9)" }} />
               <div
                 style={{ position:"absolute", right:0, top:-18, width:36, height:36, background:"#B8924A", borderRadius:"50% 0 0 50%", display:"flex", alignItems:"center", justifyContent:"center", cursor:"grab", pointerEvents:"auto", boxShadow:"-2px 0 8px rgba(0,0,0,0.4)", touchAction:"none" }}
@@ -517,35 +754,26 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
             </div>
           )}
 
-          {/* 工程切り替えトースト */}
           {toast && (
             <div style={{ position:"absolute", top:16, left:"50%", transform:"translateX(-50%)", zIndex:40, background:"rgba(45,74,62,0.95)", color:"#F5EEDD", borderRadius:12, padding:"10px 20px", fontSize:14, fontFamily:"sans-serif", whiteSpace:"nowrap", boxShadow:"0 4px 16px rgba(0,0,0,0.4)", pointerEvents:"none" }}>
               {toast}
             </div>
           )}
 
-          {/* フローティングカウンターバー */}
           {section && onCount && (
             <div style={{ position:"absolute", bottom:16, left:"50%", transform:"translateX(-50%)", zIndex:30, display:"flex", alignItems:"center", gap:0, background:"rgba(45,74,62,0.92)", borderRadius:16, boxShadow:"0 4px 20px rgba(0,0,0,0.5)", overflow:"hidden", backdropFilter:"blur(8px)" }}>
               <div style={{ padding:"10px 16px", borderRight:"1px solid rgba(245,238,221,0.15)" }}>
                 <div style={{ color:"rgba(245,238,221,0.6)", fontSize:10, fontFamily:"sans-serif", marginBottom:2 }}>{section.name}</div>
                 <div style={{ color:"#F5EEDD", fontSize:22, fontWeight:"bold", lineHeight:1 }}>{section.rows}<span style={{ fontSize:12, marginLeft:4, opacity:0.7 }}>段</span></div>
               </div>
-              <button
-                onClick={() => onCount(-1)}
-                style={{ background:"transparent", border:"none", color:"#F0D9D6", fontSize:24, padding:"0 18px", height:60, cursor:"pointer", borderRight:"1px solid rgba(245,238,221,0.15)" }}
-              >−</button>
-              <button
-                onClick={() => onCount(1)}
-                style={{ background:"transparent", border:"none", color:"#F5EEDD", fontSize:24, fontWeight:"bold", padding:"0 22px", height:60, cursor:"pointer" }}
-              >＋</button>
+              <button onClick={() => onCount(-1)} style={{ background:"transparent", border:"none", color:"#F0D9D6", fontSize:24, padding:"0 18px", height:60, cursor:"pointer", borderRight:"1px solid rgba(245,238,221,0.15)" }}>−</button>
+              <button onClick={() => onCount(1)} style={{ background:"transparent", border:"none", color:"#F5EEDD", fontSize:24, fontWeight:"bold", padding:"0 22px", height:60, cursor:"pointer" }}>＋</button>
             </div>
           )}
         </div>
 
         {!isPdf && charts.length > 0 && (
           <div style={{ width:52, background:"#2D4A3E", display:"flex", flexDirection:"column", alignItems:"center", padding:"10px 0", gap:10, flexShrink:0, overflowY:"auto" }}>
-
             {[[null,"👁","閲覧"],["pen","✏️","ペン"],["eraser","🧹","消しゴム"]].map(([t, icon, label]) => (
               <button key={String(t)} onClick={() => setTool(t)} title={label} style={{
                 background: tool===t ? "#B8924A" : "transparent",
@@ -554,82 +782,35 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
                 display:"flex", alignItems:"center", justifyContent:"center",
               }}>{icon}</button>
             ))}
-
-            {/* Undoボタン */}
-            <button onClick={undo} title="1つ戻す" style={{
-              background:"transparent",
-              border:"1px solid rgba(245,238,221,0.3)",
-              borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
-              display:"flex", alignItems:"center", justifyContent:"center",
-            }}>↩️</button>
-
+            <button onClick={undo} title="1つ戻す" style={{ background:"transparent", border:"1px solid rgba(245,238,221,0.3)", borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>↩️</button>
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
-
-            <button onClick={() => setShowMarker(m => !m)} title="段マーカー" style={{
-              background: showMarker ? "rgba(184,146,74,0.3)" : "transparent",
-              border: `1px solid ${showMarker ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
-              borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
-              display:"flex", alignItems:"center", justifyContent:"center",
-            }}>📍</button>
-
-            {/* マーカー位置に線を引くボタン */}
+            <button onClick={() => setShowMarker(m => !m)} title="段マーカー" style={{ background: showMarker ? "rgba(184,146,74,0.3)" : "transparent", border: `1px solid ${showMarker ? "#B8924A" : "rgba(245,238,221,0.3)"}`, borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>📍</button>
             {showMarker && (
-              <button onClick={drawMarkerLine} title="ラインに沿って線を引く" style={{
-                background:"rgba(184,146,74,0.2)",
-                border:"1px solid #B8924A",
-                borderRadius:10, width:42, height:42, fontSize:16, cursor:"pointer",
-                display:"flex", alignItems:"center", justifyContent:"center",
-                flexDirection:"column", gap:1,
-              }}>
+              <button onClick={drawMarkerLine} title="ラインに沿って線を引く" style={{ background:"rgba(184,146,74,0.2)", border:"1px solid #B8924A", borderRadius:10, width:42, height:42, fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:1 }}>
                 <span style={{ fontSize:13 }}>✏️</span>
                 <span style={{ fontSize:9, color:"#B8924A", fontFamily:"sans-serif", lineHeight:1 }}>引く</span>
               </button>
             )}
-
             {showMarker && <>
               <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
               {[1,2,3,4,5].map(h => (
-                <button key={h} onClick={() => setMarkerHeight(h)} style={{
-                  background: markerHeight===h ? "rgba(184,146,74,0.4)" : "transparent",
-                  border: `1px solid ${markerHeight===h ? "#B8924A" : "rgba(245,238,221,0.2)"}`,
-                  borderRadius:6, width:42, height:22, cursor:"pointer",
-                  display:"flex", alignItems:"center", justifyContent:"center",
-                }}>
+                <button key={h} onClick={() => setMarkerHeight(h)} style={{ background: markerHeight===h ? "rgba(184,146,74,0.4)" : "transparent", border: `1px solid ${markerHeight===h ? "#B8924A" : "rgba(245,238,221,0.2)"}`, borderRadius:6, width:42, height:22, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>
                   <div style={{ width:28, height:[2,3,5,8,11][h-1], background:"rgba(184,146,74,0.8)", borderRadius:2 }} />
                 </button>
               ))}
             </>}
-
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
-
             {COLORS.map(cl => (
-              <button key={cl} onClick={() => { setColor(cl); setTool("pen"); }} style={{
-                width:26, height:26, borderRadius:"50%", background:cl,
-                border: color===cl && tool==="pen" ? "3px solid #F5EEDD" : "2px solid rgba(255,255,255,0.2)",
-                cursor:"pointer", flexShrink:0,
-              }} />
+              <button key={cl} onClick={() => { setColor(cl); setTool("pen"); }} style={{ width:26, height:26, borderRadius:"50%", background:cl, border: color===cl && tool==="pen" ? "3px solid #F5EEDD" : "2px solid rgba(255,255,255,0.2)", cursor:"pointer", flexShrink:0 }} />
             ))}
-
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
-
             {[2,4,8].map(w => (
-              <button key={w} onClick={() => setLineWidth(w)} style={{
-                background: lineWidth===w ? "#B8924A" : "transparent",
-                border: `1px solid ${lineWidth===w ? "#B8924A" : "rgba(245,238,221,0.3)"}`,
-                borderRadius:8, width:42, height:26, cursor:"pointer",
-                display:"flex", alignItems:"center", justifyContent:"center",
-              }}>
+              <button key={w} onClick={() => setLineWidth(w)} style={{ background: lineWidth===w ? "#B8924A" : "transparent", border: `1px solid ${lineWidth===w ? "#B8924A" : "rgba(245,238,221,0.3)"}`, borderRadius:8, width:42, height:26, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>
                 <div style={{ width:24, height:w===2?1:w===4?3:5, background:"#F5EEDD", borderRadius:3 }} />
               </button>
             ))}
-
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
-
-            <button onClick={handleDelete} title="削除" style={{
-              background:"transparent", border:"1px solid rgba(244,164,164,0.3)",
-              color:"#f4a4a4", borderRadius:10, width:42, height:42, fontSize:18,
-              cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
-            }}>🗑️</button>
+            <button onClick={handleDelete} title="削除" style={{ background:"transparent", border:"1px solid rgba(244,164,164,0.3)", color:"#f4a4a4", borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>🗑️</button>
           </div>
         )}
       </div>
@@ -637,33 +818,18 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
   );
 }
 
-
-const C = {
-  bg: "#F7F4EE", card: "#FDFBF7",
-  green: "#2D4A3E", rose: "#C4837A", rosePale: "#F0D9D6",
-  gold: "#B8924A", goldPale: "#F5EEDD",
-  text: "#2C2416", textMid: "#6B5F4E", textLight: "#9C8E7A",
-  border: "#DDD5C4",
-};
-
 // ── Small components ──────────────────────────────────────────────────────────
 
 const Tag = ({ children }) => (
-  <span style={{ fontSize:11, background:C.goldPale, color:C.gold, border:`1px solid ${C.gold}`, borderRadius:4, padding:"2px 7px", fontFamily:"sans-serif" }}>
-    {children}
-  </span>
+  <span style={{ fontSize:11, background:C.goldPale, color:C.gold, border:`1px solid ${C.gold}`, borderRadius:4, padding:"2px 7px", fontFamily:"sans-serif" }}>{children}</span>
 );
 
 const GhostBtn = ({ onClick, children, style = {} }) => (
-  <button onClick={onClick} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.textMid, borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif", ...style }}>
-    {children}
-  </button>
+  <button onClick={onClick} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.textMid, borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif", ...style }}>{children}</button>
 );
 
 const FieldLabel = ({ children }) => (
-  <label style={{ display:"block", fontSize:11, color:C.gold, letterSpacing:"0.1em", fontFamily:"sans-serif", textTransform:"uppercase", marginBottom:6, marginTop:16 }}>
-    {children}
-  </label>
+  <label style={{ display:"block", fontSize:11, color:C.gold, letterSpacing:"0.1em", fontFamily:"sans-serif", textTransform:"uppercase", marginBottom:6, marginTop:16 }}>{children}</label>
 );
 
 const ProgressBar = ({ pct }) => (
@@ -675,6 +841,9 @@ const ProgressBar = ({ pct }) => (
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   const [projects, setProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [view, setView] = useState("counter");
@@ -684,104 +853,106 @@ function App() {
   const [syncStatus, setSyncStatus] = useState("loading");
   const [showCharts, setShowCharts] = useState(false);
 
-  // 起動時: Supabaseから読み込み、なければローカルから移行
+  // 起動時：セッション復元
   useEffect(() => {
     (async () => {
-      let data = await loadFromSupabase();
-      if (data && data.projects && data.projects.length > 0) {
-        // base64 annotationをStorageに移行
-        let needsSave = false;
-        const migratedProjects = await Promise.all(data.projects.map(async (p) => {
-          if (!p.charts) return p;
-          const migratedCharts = await Promise.all(p.charts.map(async (c, i) => {
-            if (!c.annotation || !c.annotation.startsWith("data:")) return c;
-            try {
-              const url = await uploadAnnotation(p.id, i, c.annotation);
-              needsSave = true;
-              return { ...c, annotation: url };
-            } catch { return c; }
-          }));
-          return { ...p, charts: migratedCharts };
-        }));
-        setProjects(migratedProjects);
-        setActiveProjectId(data.activeProjectId || migratedProjects[0].id);
-        if (needsSave) await saveToSupabase(migratedProjects, data.activeProjectId);
-        clearLocal();
-        setSyncStatus("ok");
-      } else {
-        // ローカルデータがあれば移行
-        const local = loadLocal();
-        if (local && local.projects && local.projects.length > 0) {
-          setProjects(local.projects);
-          setActiveProjectId(local.activeProjectId || local.projects[0].id);
-          await saveToSupabase(local.projects, local.activeProjectId);
-          clearLocal();
+      const saved = loadSession();
+      if (!saved) { setAuthLoading(false); return; }
+
+      // トークンの有効期限確認（expiry があれば）
+      try {
+        const refreshed = await authRefresh(saved.refresh_token);
+        if (refreshed.access_token) {
+          const newSession = { access_token: refreshed.access_token, refresh_token: refreshed.refresh_token, user: refreshed.user };
+          saveSession(newSession);
+          setSession(newSession);
         } else {
-          const p = initProject();
-          setProjects([p]);
-          setActiveProjectId(p.id);
+          clearSession();
         }
-        setSyncStatus("ok");
+      } catch {
+        clearSession();
       }
+      setAuthLoading(false);
     })();
   }, []);
+
+  // ログイン後：データ読み込み
+  useEffect(() => {
+    if (!session) return;
+    (async () => {
+      setSyncStatus("loading");
+      let data = await loadFromSupabase(session.access_token, session.user.id);
+      if (data && data.projects && data.projects.length > 0) {
+        setProjects(data.projects);
+        setActiveProjectId(data.activeProjectId || data.projects[0].id);
+      } else {
+        const p = initProject();
+        setProjects([p]);
+        setActiveProjectId(p.id);
+      }
+      setSyncStatus("ok");
+    })();
+  }, [session?.user?.id]);
 
   // データ変更時にSupabaseへ保存
   const saveRef = useRef(null);
   useEffect(() => {
-    if (projects.length === 0 || syncStatus === "loading") return;
+    if (!session || projects.length === 0 || syncStatus === "loading") return;
     if (saveRef.current) clearTimeout(saveRef.current);
     saveRef.current = setTimeout(async () => {
       try {
-        await saveToSupabase(projects, activeProjectId);
+        await saveToSupabase(session.access_token, session.user.id, projects, activeProjectId);
         setSyncStatus("ok");
       } catch {
         setSyncStatus("error");
       }
-    }, 800); // 800ms デバウンス
+    }, 800);
   }, [projects, activeProjectId]);
+
+  const handleSignOut = async () => {
+    if (!window.confirm("ログアウトしますか？")) return;
+    await authSignOut(session.access_token);
+    clearSession();
+    setSession(null);
+    setProjects([]);
+    setSyncStatus("loading");
+  };
+
+  // 起動中
+  if (authLoading) {
+    return (
+      <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:16 }}>
+        <div style={{ fontSize:40 }}>🧶</div>
+        <div style={{ fontSize:14, color:C.textLight, fontFamily:"sans-serif" }}>読み込み中…</div>
+      </div>
+    );
+  }
+
+  // 未ログイン
+  if (!session) {
+    return <AuthScreen onAuth={(s) => setSession(s)} />;
+  }
 
   const activeProject = projects.find(p => p.id === activeProjectId);
   const activeSection = activeProject?.sections?.find(s => s.id === activeProject.activeSectionId);
 
   const updateProjects = fn => setProjects(ps => fn(ps));
-
-  const updateActiveProject = fn =>
-    updateProjects(ps => ps.map(p => p.id === activeProjectId ? fn(p) : p));
-
-  const updateActiveSection = fn =>
-    updateActiveProject(p => ({
-      ...p,
-      sections: p.sections.map(s => s.id === p.activeSectionId ? fn(s) : s)
-    }));
+  const updateActiveProject = fn => updateProjects(ps => ps.map(p => p.id === activeProjectId ? fn(p) : p));
+  const updateActiveSection = fn => updateActiveProject(p => ({ ...p, sections: p.sections.map(s => s.id === p.activeSectionId ? fn(s) : s) }));
 
   const increment = () => {
     updateActiveSection(s => ({ ...s, rows: s.rows + 1 }));
     setTapFeedback(true);
     setTimeout(() => setTapFeedback(false), 150);
   };
-
   const decrement = () => updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows - 1) }));
-
-  const resetSection = () => {
-    if (window.confirm("この工程の段数を0にリセットしますか？"))
-      updateActiveSection(s => ({ ...s, rows: 0 }));
-  };
-
-  const toggleDone = id =>
-    updateActiveProject(p => ({
-      ...p,
-      sections: p.sections.map(s => s.id === id ? { ...s, done: !s.done } : s)
-    }));
-
-  const switchSection = id =>
-    updateActiveProject(p => ({ ...p, activeSectionId: id }));
-
+  const resetSection = () => { if (window.confirm("この工程の段数を0にリセットしますか？")) updateActiveSection(s => ({ ...s, rows: 0 })); };
+  const toggleDone = id => updateActiveProject(p => ({ ...p, sections: p.sections.map(s => s.id === id ? { ...s, done: !s.done } : s) }));
+  const switchSection = id => updateActiveProject(p => ({ ...p, activeSectionId: id }));
   const addSection = () => {
     const s = newSection(`工程 ${(activeProject?.sections?.length || 0) + 1}`);
     updateActiveProject(p => ({ ...p, sections: [...p.sections, s], activeSectionId: s.id }));
   };
-
   const moveSectionUp = id => {
     updateActiveProject(p => {
       const idx = p.sections.findIndex(s => s.id === id);
@@ -791,7 +962,6 @@ function App() {
       return { ...p, sections: next };
     });
   };
-
   const moveSectionDown = id => {
     updateActiveProject(p => {
       const idx = p.sections.findIndex(s => s.id === id);
@@ -801,7 +971,6 @@ function App() {
       return { ...p, sections: next };
     });
   };
-
   const deleteSection = id => {
     if (!window.confirm("この工程を削除しますか？")) return;
     updateActiveProject(p => {
@@ -811,7 +980,6 @@ function App() {
       return { ...p, sections: next, activeSectionId: newActive };
     });
   };
-
   const addProject = () => {
     const p = initProject();
     setProjects(ps => [...ps, p]);
@@ -819,7 +987,6 @@ function App() {
     setEditProjectDraft({ ...p });
     setView("editProject");
   };
-
   const deleteProject = id => {
     if (!window.confirm("このプロジェクトを削除しますか？")) return;
     setProjects(ps => {
@@ -838,35 +1005,26 @@ function App() {
     return ts.length === p.sections.length ? ts.reduce((a,b)=>a+b,0) : null;
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────────
-
   return (
     <div style={{ minHeight:"100vh", background:C.bg }}>
 
-      {/* Chart Viewer (fullscreen overlay) */}
       {showCharts && activeProject && (
         <ChartViewer
           charts={activeProject.charts || []}
           projectId={activeProject.id}
+          token={session.access_token}
           onClose={() => setShowCharts(false)}
           onChartsChange={charts => updateActiveProject(p => ({ ...p, charts }))}
           section={activeSection}
           onCount={delta => {
-            if (delta <= 0) {
-              updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows + delta) }));
-              return;
-            }
-            // ＋の時、目標段数チェック＆次の工程へ自動切り替え
+            if (delta <= 0) { updateActiveSection(s => ({ ...s, rows: Math.max(0, s.rows + delta) })); return; }
             updateActiveProject(p => {
               const sIdx = p.sections.findIndex(s => s.id === p.activeSectionId);
               const s = p.sections[sIdx];
               const newRows = s.rows + 1;
               const target = s.targetRows ? parseInt(s.targetRows) : null;
               const reached = target && newRows >= target;
-              // 次の未完了工程を探す
-              const nextSection = reached
-                ? p.sections.slice(sIdx + 1).find(ns => !ns.done)
-                : null;
+              const nextSection = reached ? p.sections.slice(sIdx + 1).find(ns => !ns.done) : null;
               return {
                 ...p,
                 activeSectionId: nextSection ? nextSection.id : p.activeSectionId,
@@ -888,7 +1046,7 @@ function App() {
             {syncStatus==="loading" ? "読込中…" : syncStatus==="ok" ? "✓" : "⚠ 同期エラー"}
           </div>
         </div>
-        <nav style={{ display:"flex", gap:8 }}>
+        <nav style={{ display:"flex", gap:6, alignItems:"center" }}>
           {[["counter","カウンター"],["projects","プロジェクト"]].map(([v,label]) => (
             <button key={v} onClick={() => setView(v)} style={{
               background: view===v ? C.gold : "transparent",
@@ -899,23 +1057,26 @@ function App() {
               cursor:"pointer", fontFamily:"sans-serif"
             }}>{label}</button>
           ))}
+          <button onClick={handleSignOut} title="ログアウト" style={{ background:"transparent", border:"1px solid rgba(245,238,221,0.3)", color:"rgba(245,238,221,0.6)", borderRadius:20, padding:"5px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif" }}>
+            ⏏
+          </button>
         </nav>
       </header>
 
       <main style={{ maxWidth:480, margin:"0 auto", padding:"16px 14px 60px" }}>
         <div id="__sync" style={{ fontFamily:"sans-serif", fontSize:11, color:C.textLight, textAlign:"center", marginBottom:8 }}></div>
+
         {syncStatus === "loading" && (
           <div style={{ textAlign:"center", padding:"60px 0", color:C.textLight, fontFamily:"sans-serif" }}>
             <div style={{ fontSize:32, marginBottom:12 }}>🧶</div>
             <div>データを読み込み中…</div>
           </div>
         )}
+
         {syncStatus !== "loading" && (<>
 
         {/* ── COUNTER ── */}
         {view === "counter" && activeProject && (<>
-
-          {/* Project card */}
           <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px", marginBottom:12, boxShadow:"0 2px 12px rgba(45,74,62,0.06)" }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
               <Tag>{activeProject.type}</Tag>
@@ -923,7 +1084,6 @@ function App() {
               <button onClick={() => setShowCharts(true)} style={{ background:C.goldPale, border:`1px solid ${C.gold}`, color:C.gold, borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif" }}>📄 編み図</button>
               <GhostBtn onClick={() => { setEditProjectDraft({...activeProject}); setView("editProject"); }}>編集</GhostBtn>
             </div>
-            {/* Overall stats */}
             {(() => {
               const total = projectTotalRows(activeProject);
               const target = projectTotalTarget(activeProject);
@@ -942,7 +1102,6 @@ function App() {
             })()}
           </div>
 
-          {/* Section tabs */}
           <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
             {activeProject.sections.map(s => (
               <button key={s.id} onClick={() => switchSection(s.id)} style={{
@@ -951,27 +1110,18 @@ function App() {
                 color: s.id===activeProject.activeSectionId ? "#F5EEDD" : C.textMid,
                 borderRadius:20, padding:"6px 14px", fontSize:13, cursor:"pointer",
                 fontFamily:"sans-serif", fontWeight: s.id===activeProject.activeSectionId ? "bold" : "normal",
-                opacity: s.done ? 0.5 : 1,
-                textDecoration: s.done ? "line-through" : "none",
-              }}>
-                {s.done ? "✓ " : ""}{s.name}
-              </button>
+                opacity: s.done ? 0.5 : 1, textDecoration: s.done ? "line-through" : "none",
+              }}>{s.done ? "✓ " : ""}{s.name}</button>
             ))}
             <button onClick={addSection} style={{ background:"transparent", border:`1px dashed ${C.border}`, color:C.textLight, borderRadius:20, padding:"6px 12px", fontSize:16, cursor:"pointer" }}>＋</button>
           </div>
 
-          {/* Active section */}
           {activeSection && (
             <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px", boxShadow:"0 2px 12px rgba(45,74,62,0.06)" }}>
               <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4, flexWrap:"wrap" }}>
                 <span style={{ fontSize:17, fontWeight:"bold", color:C.green, flex:1 }}>{activeSection.name}</span>
                 <GhostBtn onClick={() => { setEditSectionDraft({...activeSection}); setView("editSection"); }}>編集</GhostBtn>
-                <button onClick={() => toggleDone(activeSection.id)} style={{
-                  background: activeSection.done ? C.green : "transparent",
-                  border: activeSection.done ? `1px solid ${C.green}` : `1px solid ${C.border}`,
-                  color: activeSection.done ? "#F5EEDD" : C.textLight,
-                  borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif"
-                }}>{activeSection.done ? "✓ 完了" : "完了にする"}</button>
+                <button onClick={() => toggleDone(activeSection.id)} style={{ background: activeSection.done ? C.green : "transparent", border: activeSection.done ? `1px solid ${C.green}` : `1px solid ${C.border}`, color: activeSection.done ? "#F5EEDD" : C.textLight, borderRadius:6, padding:"4px 10px", fontSize:12, cursor:"pointer", fontFamily:"sans-serif" }}>{activeSection.done ? "✓ 完了" : "完了にする"}</button>
               </div>
 
               <div style={{ textAlign:"center", padding:"20px 0 16px" }}>
@@ -1004,18 +1154,12 @@ function App() {
             </div>
           )}
 
-          {/* Quick project switch */}
           {projects.length > 1 && (
             <div style={{ marginTop:16, borderTop:`1px solid ${C.border}`, paddingTop:14 }}>
               <div style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif", marginBottom:8 }}>プロジェクトを切り替え</div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
                 {projects.map(p => (
-                  <button key={p.id} onClick={() => { setActiveProjectId(p.id); }} style={{
-                    background: p.id===activeProjectId ? C.green : "white",
-                    border: p.id===activeProjectId ? `1px solid ${C.green}` : `1px solid ${C.border}`,
-                    color: p.id===activeProjectId ? "#F5EEDD" : C.textMid,
-                    borderRadius:20, padding:"5px 14px", fontSize:13, cursor:"pointer", fontFamily:"sans-serif"
-                  }}>{p.name}</button>
+                  <button key={p.id} onClick={() => setActiveProjectId(p.id)} style={{ background: p.id===activeProjectId ? C.green : "white", border: p.id===activeProjectId ? `1px solid ${C.green}` : `1px solid ${C.border}`, color: p.id===activeProjectId ? "#F5EEDD" : C.textMid, borderRadius:20, padding:"5px 14px", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>{p.name}</button>
                 ))}
               </div>
             </div>
@@ -1048,9 +1192,7 @@ function App() {
                   </div>
                   {target && <div style={{ margin:"8px 0" }}><ProgressBar pct={pct} /></div>}
                   <div style={{ display:"flex", gap:8, marginTop:10 }}>
-                    <button onClick={() => { setActiveProjectId(p.id); setView("counter"); }} style={{ flex:1, background:C.green, color:"#F5EEDD", border:"none", borderRadius:6, padding:"7px 0", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>
-                      {p.id===activeProjectId ? "✓ 選択中" : "選択"}
-                    </button>
+                    <button onClick={() => { setActiveProjectId(p.id); setView("counter"); }} style={{ flex:1, background:C.green, color:"#F5EEDD", border:"none", borderRadius:6, padding:"7px 0", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>{p.id===activeProjectId ? "✓ 選択中" : "選択"}</button>
                     <button onClick={() => deleteProject(p.id)} style={{ background:"transparent", border:`1px solid ${C.border}`, color:C.rose, borderRadius:6, padding:"7px 14px", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>削除</button>
                   </div>
                 </div>
@@ -1063,36 +1205,19 @@ function App() {
         {view === "editProject" && editProjectDraft && (
           <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px" }}>
             <h2 style={{ fontSize:20, color:C.green, marginBottom:4 }}>プロジェクトを編集</h2>
-
             <FieldLabel>プロジェクト名</FieldLabel>
-            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
-              value={editProjectDraft.name}
-              onChange={e => setEditProjectDraft({...editProjectDraft, name:e.target.value})} />
-
+            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }} value={editProjectDraft.name} onChange={e => setEditProjectDraft({...editProjectDraft, name:e.target.value})} />
             <FieldLabel>種類</FieldLabel>
             <div style={{ display:"flex", gap:8, marginTop:2 }}>
               {["棒針","かぎ針","その他"].map(t => (
-                <button key={t} onClick={() => setEditProjectDraft({...editProjectDraft, type:t})} style={{
-                  flex:1, background: editProjectDraft.type===t ? C.green : C.bg,
-                  border: editProjectDraft.type===t ? `1px solid ${C.green}` : `1px solid ${C.border}`,
-                  color: editProjectDraft.type===t ? "#F5EEDD" : C.textMid,
-                  borderRadius:8, padding:"9px 0", fontSize:14, cursor:"pointer", fontFamily:"sans-serif"
-                }}>{t}</button>
+                <button key={t} onClick={() => setEditProjectDraft({...editProjectDraft, type:t})} style={{ flex:1, background: editProjectDraft.type===t ? C.green : C.bg, border: editProjectDraft.type===t ? `1px solid ${C.green}` : `1px solid ${C.border}`, color: editProjectDraft.type===t ? "#F5EEDD" : C.textMid, borderRadius:8, padding:"9px 0", fontSize:14, cursor:"pointer", fontFamily:"sans-serif" }}>{t}</button>
               ))}
             </div>
-
             <FieldLabel>メモ</FieldLabel>
-            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }}
-              placeholder="使用糸、針のサイズなど"
-              value={editProjectDraft.memo}
-              onChange={e => setEditProjectDraft({...editProjectDraft, memo:e.target.value})} />
-
+            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }} placeholder="使用糸、針のサイズなど" value={editProjectDraft.memo} onChange={e => setEditProjectDraft({...editProjectDraft, memo:e.target.value})} />
             <div style={{ display:"flex", gap:10, marginTop:24 }}>
               <GhostBtn onClick={() => setView("counter")} style={{ flex:1, padding:"12px 0", fontSize:15 }}>キャンセル</GhostBtn>
-              <button onClick={() => {
-                updateProjects(ps => ps.map(p => p.id===editProjectDraft.id ? {...p, ...editProjectDraft} : p));
-                setView("counter");
-              }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
+              <button onClick={() => { updateProjects(ps => ps.map(p => p.id===editProjectDraft.id ? {...p, ...editProjectDraft} : p)); setView("counter"); }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
             </div>
           </div>
         )}
@@ -1101,50 +1226,27 @@ function App() {
         {view === "editSection" && editSectionDraft && (
           <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.border}`, padding:"18px 16px" }}>
             <h2 style={{ fontSize:20, color:C.green, marginBottom:4 }}>工程を編集</h2>
-
             <FieldLabel>工程名</FieldLabel>
-            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
-              value={editSectionDraft.name}
-              onChange={e => setEditSectionDraft({...editSectionDraft, name:e.target.value})} />
-
+            <input style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }} value={editSectionDraft.name} onChange={e => setEditSectionDraft({...editSectionDraft, name:e.target.value})} />
             <FieldLabel>目標段数（省略可）</FieldLabel>
-            <input type="number" style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }}
-              placeholder="例: 40"
-              value={editSectionDraft.targetRows}
-              onChange={e => setEditSectionDraft({...editSectionDraft, targetRows:e.target.value})} />
-
+            <input type="number" style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:15, color:C.text, boxSizing:"border-box" }} placeholder="例: 40" value={editSectionDraft.targetRows} onChange={e => setEditSectionDraft({...editSectionDraft, targetRows:e.target.value})} />
             <FieldLabel>メモ</FieldLabel>
-            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }}
-              placeholder="この工程のメモ・パターンなど"
-              value={editSectionDraft.memo}
-              onChange={e => setEditSectionDraft({...editSectionDraft, memo:e.target.value})} />
-
+            <textarea style={{ width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 12px", fontSize:14, color:C.text, boxSizing:"border-box", minHeight:90, resize:"vertical" }} placeholder="この工程のメモ・パターンなど" value={editSectionDraft.memo} onChange={e => setEditSectionDraft({...editSectionDraft, memo:e.target.value})} />
             <FieldLabel>工程の順番</FieldLabel>
             <div style={{ display:"flex", gap:8 }}>
-              <button onClick={() => { moveSectionUp(editSectionDraft.id); }} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↑ 前へ</button>
-              <button onClick={() => { moveSectionDown(editSectionDraft.id); }} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↓ 後へ</button>
+              <button onClick={() => moveSectionUp(editSectionDraft.id)} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↑ 前へ</button>
+              <button onClick={() => moveSectionDown(editSectionDraft.id)} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↓ 後へ</button>
             </div>
             <div style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif", marginTop:6 }}>
-              {activeProject?.sections && (() => {
-                const idx = activeProject.sections.findIndex(s => s.id === editSectionDraft.id);
-                return idx >= 0 ? `現在の位置: ${idx+1} / ${activeProject.sections.length}` : "";
-              })()}
+              {activeProject?.sections && (() => { const idx = activeProject.sections.findIndex(s => s.id === editSectionDraft.id); return idx >= 0 ? `現在の位置: ${idx+1} / ${activeProject.sections.length}` : ""; })()}
             </div>
-
             <div style={{ display:"flex", gap:10, marginTop:24 }}>
               <GhostBtn onClick={() => setView("counter")} style={{ flex:1, padding:"12px 0", fontSize:15 }}>キャンセル</GhostBtn>
-              <button onClick={() => {
-                updateActiveProject(p => ({
-                  ...p,
-                  sections: p.sections.map(s => s.id===editSectionDraft.id ? {...s, ...editSectionDraft} : s)
-                }));
-                setView("counter");
-              }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
+              <button onClick={() => { updateActiveProject(p => ({ ...p, sections: p.sections.map(s => s.id===editSectionDraft.id ? {...s, ...editSectionDraft} : s) })); setView("counter"); }} style={{ flex:2, background:C.green, border:"none", color:"#F5EEDD", borderRadius:8, padding:"12px 0", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>保存</button>
             </div>
           </div>
         )}
         </>)}
-
       </main>
     </div>
   );
@@ -1154,14 +1256,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 
 <script>
-// Service Worker 登録 & アップデート通知
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').then(reg => {
     reg.addEventListener('updatefound', () => {
       const newWorker = reg.installing;
       newWorker.addEventListener('statechange', () => {
         if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-          // アップデートあり → バナー表示
           const banner = document.createElement('div');
           banner.innerHTML = `
             <div style="position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
