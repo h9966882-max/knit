@@ -203,6 +203,25 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     };
   };
 
+  const historyRef = useRef([]); // Undo履歴（ImageData）
+  const MAX_HISTORY = 20;
+
+  const pushHistory = () => {
+    const dc = drawCanvasRef.current;
+    if (!dc) return;
+    const snapshot = dc.getContext("2d").getImageData(0, 0, dc.width, dc.height);
+    historyRef.current = [...historyRef.current.slice(-MAX_HISTORY + 1), snapshot];
+  };
+
+  const undo = () => {
+    const dc = drawCanvasRef.current;
+    if (!dc || historyRef.current.length === 0) return;
+    const prev = historyRef.current[historyRef.current.length - 1];
+    historyRef.current = historyRef.current.slice(0, -1);
+    dc.getContext("2d").putImageData(prev, 0, 0);
+    saveAnnotation();
+  };
+
   const saveAnnotation = () => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
@@ -246,6 +265,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
       const t = e.touches[0];
       const pos = getCanvasPos(t.clientX, t.clientY);
       if (!pos) return;
+      pushHistory();
       drawing.current = true; lastPos.current = pos;
     } else {
       const t = e.touches[0];
@@ -283,6 +303,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     if (tool !== "pen" && tool !== "eraser") return;
     const pos = getCanvasPos(e.clientX, e.clientY);
     if (!pos) return;
+    pushHistory();
     drawing.current = true; lastPos.current = pos;
   };
   const onMouseMove = (e) => {
@@ -304,6 +325,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     const dcRect = dc.getBoundingClientRect();
     const canvasY = (markerClientY - dcRect.top) * (dc.height / dcRect.height);
     if (canvasY < 0 || canvasY > dc.height) return;
+    pushHistory();
     const ctx = dc.getContext("2d");
     ctx.beginPath();
     ctx.moveTo(0, canvasY);
@@ -460,6 +482,14 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
                 display:"flex", alignItems:"center", justifyContent:"center",
               }}>{icon}</button>
             ))}
+
+            {/* Undoボタン */}
+            <button onClick={undo} title="1つ戻す" style={{
+              background:"transparent",
+              border:"1px solid rgba(245,238,221,0.3)",
+              borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
+              display:"flex", alignItems:"center", justifyContent:"center",
+            }}>↩️</button>
 
             <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
 
