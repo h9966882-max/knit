@@ -518,23 +518,13 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
 
   const saveAnnotation = () => {
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    saveTimer.current = setTimeout(() => {
       const dc = drawCanvasRef.current;
       if (!dc) return;
+      // base64で直接保存（Storageアップロード不要・確実に動く）
       const base64 = dc.toDataURL("image/png");
-      try {
-        const oldAnnotation = charts[activeIdx]?.annotation;
-        if (oldAnnotation && !oldAnnotation.startsWith("data:")) {
-          deleteAnnotation(token, oldAnnotation);
-        }
-        const annotationUrl = await uploadAnnotation(token, projectId, activeIdx, base64);
-        const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation: annotationUrl } : c);
-        onChartsChange(updated);
-      } catch(e) {
-        console.warn("Annotation storage failed, using base64:", e);
-        const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation: base64 } : c);
-        onChartsChange(updated);
-      }
+      const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation: base64 } : c);
+      onChartsChange(updated);
     }, 800);
   };
 
