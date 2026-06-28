@@ -450,6 +450,18 @@ function App() {
               value={editSectionDraft.memo}
               onChange={e => setEditSectionDraft({...editSectionDraft, memo:e.target.value})} />
 
+            <FieldLabel>工程の順番</FieldLabel>
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={() => { moveSectionUp(editSectionDraft.id); }} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↑ 前へ</button>
+              <button onClick={() => { moveSectionDown(editSectionDraft.id); }} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"10px 0", fontSize:18, cursor:"pointer" }}>↓ 後へ</button>
+            </div>
+            <div style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif", marginTop:6 }}>
+              {activeProject?.sections && (() => {
+                const idx = activeProject.sections.findIndex(s => s.id === editSectionDraft.id);
+                return idx >= 0 ? `現在の位置: ${idx+1} / ${activeProject.sections.length}` : "";
+              })()}
+            </div>
+
             <div style={{ display:"flex", gap:10, marginTop:24 }}>
               <GhostBtn onClick={() => setView("counter")} style={{ flex:1, padding:"12px 0", fontSize:15 }}>キャンセル</GhostBtn>
               <button onClick={() => {
