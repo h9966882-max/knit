@@ -293,6 +293,29 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
   };
   const onMouseUp = () => { if (drawing.current) { drawing.current = false; saveAnnotation(); } };
 
+  // 段マーカー位置に水平線を描く
+  const drawMarkerLine = () => {
+    const dc = drawCanvasRef.current;
+    const vp = viewportRef.current;
+    if (!dc || !vp) return;
+    // viewport内でのマーカーのY位置をcanvas座標に変換
+    const vpRect = vp.getBoundingClientRect();
+    const markerClientY = vpRect.top + markerY * vpRect.height;
+    const dcRect = dc.getBoundingClientRect();
+    const canvasY = (markerClientY - dcRect.top) * (dc.height / dcRect.height);
+    if (canvasY < 0 || canvasY > dc.height) return;
+    const ctx = dc.getContext("2d");
+    ctx.beginPath();
+    ctx.moveTo(0, canvasY);
+    ctx.lineTo(dc.width, canvasY);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = "round";
+    ctx.globalCompositeOperation = "source-over";
+    ctx.stroke();
+    saveAnnotation();
+  };
+
   const startMarkerDrag = (e) => {
     e.stopPropagation(); e.preventDefault();
     let dragging = true;
@@ -446,6 +469,20 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
               borderRadius:10, width:42, height:42, fontSize:18, cursor:"pointer",
               display:"flex", alignItems:"center", justifyContent:"center",
             }}>📍</button>
+
+            {/* マーカー位置に線を引くボタン */}
+            {showMarker && (
+              <button onClick={drawMarkerLine} title="ラインに沿って線を引く" style={{
+                background:"rgba(184,146,74,0.2)",
+                border:"1px solid #B8924A",
+                borderRadius:10, width:42, height:42, fontSize:16, cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                flexDirection:"column", gap:1,
+              }}>
+                <span style={{ fontSize:13 }}>✏️</span>
+                <span style={{ fontSize:9, color:"#B8924A", fontFamily:"sans-serif", lineHeight:1 }}>引く</span>
+              </button>
+            )}
 
             {showMarker && <>
               <div style={{ width:32, height:1, background:"rgba(245,238,221,0.2)" }} />
