@@ -54,42 +54,43 @@ const initProject = () => {
 
 const SUPABASE_URL = "https://cvlqufhuwiswretosfuj.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2bHF1Zmh1d2lzd3JldG9zZnVqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA2NzAzMzMsImV4cCI6MjA2NjI0NjMzM30.ag0coPnNA2O5trTp-rckUWkqfwJMNZHH_4E-29IEZf0";
-const TABLE = "knitting_data";
-const ROW_ID = "default";
 
-const sbFetch = (method, body) => fetch(
-  `${SUPABASE_URL}/rest/v1/${TABLE}?id=eq.${ROW_ID}`,
-  {
-    method,
-    headers: {
-      "apikey": SUPABASE_KEY,
-      "Authorization": `Bearer ${SUPABASE_KEY}`,
-      "Content-Type": "application/json",
-      "Prefer": method === "POST" ? "resolution=merge-duplicates" : "return=minimal",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  }
-);
+const HEADERS = {
+  "apikey": SUPABASE_KEY,
+  "Authorization": `Bearer ${SUPABASE_KEY}`,
+  "Content-Type": "application/json",
+};
 
 const loadFromSupabase = async () => {
   try {
-    const res = await sbFetch("GET");
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/knitting_data?id=eq.default&select=data`,
+      { headers: HEADERS }
+    );
     const rows = await res.json();
-    if (rows && rows.length > 0 && rows[0].data && Object.keys(rows[0].data).length > 0) {
+    if (rows && rows.length > 0 && rows[0].data && rows[0].data.projects) {
       return rows[0].data;
     }
-  } catch {}
+  } catch(e) { console.error("load error:", e); }
   return null;
 };
 
 const saveToSupabase = async (projects, activeProjectId) => {
   try {
-    const res = await sbFetch("PATCH", { data: { projects, activeProjectId }, updated_at: new Date().toISOString() });
-    const text = await res.text();
-    console.log("Supabase PATCH status:", res.status, text);
-  } catch(e) {
-    console.error("Supabase save error:", e);
-  }
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/knitting_data?id=eq.default`,
+      {
+        method: "PATCH",
+        headers: { ...HEADERS, "Prefer": "return=representation" },
+        body: JSON.stringify({
+          data: { projects, activeProjectId },
+          updated_at: new Date().toISOString()
+        }),
+      }
+    );
+    const json = await res.json();
+    console.log("save result:", res.status, JSON.stringify(json).slice(0, 100));
+  } catch(e) { console.error("save error:", e); }
 };
 
 // ローカルストレージ（移行用）
