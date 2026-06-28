@@ -81,22 +81,18 @@ const saveToSupabase = async (projects, activeProjectId) => {
       `${SUPABASE_URL}/rest/v1/knitting_data?id=eq.default`,
       {
         method: "PATCH",
-        headers: { ...HEADERS, "Prefer": "return=representation" },
+        headers: { ...HEADERS, "Prefer": "return=minimal" },
         body: JSON.stringify({
           data: { projects, activeProjectId },
           updated_at: new Date().toISOString()
         }),
       }
     );
-    const json = await res.json();
-    console.log("save result:", res.status, JSON.stringify(json).slice(0, 100));
-    // 画面にステータス表示（デバッグ用）
-    const el = document.getElementById("__debug");
-    if (el) el.textContent = `保存: ${res.status} / ${new Date().toLocaleTimeString("ja-JP")}`;
+    const el = document.getElementById("__sync");
+    if (el) el.textContent = res.ok ? `✓ 保存済 ${new Date().toLocaleTimeString("ja-JP")}` : `⚠ 保存エラー`;
   } catch(e) {
-    console.error("save error:", e);
-    const el = document.getElementById("__debug");
-    if (el) el.textContent = `エラー: ${e.message}`;
+    const el = document.getElementById("__sync");
+    if (el) el.textContent = `⚠ 保存エラー`;
   }
 };
 
@@ -321,7 +317,7 @@ function App() {
       </header>
 
       <main style={{ maxWidth:480, margin:"0 auto", padding:"16px 14px 60px" }}>
-        <div id="__debug" style={{ fontFamily:"sans-serif", fontSize:11, color:C.textLight, textAlign:"center", marginBottom:8 }}></div>
+        <div id="__sync" style={{ fontFamily:"sans-serif", fontSize:11, color:C.textLight, textAlign:"center", marginBottom:8 }}></div>
         {syncStatus === "loading" && (
           <div style={{ textAlign:"center", padding:"60px 0", color:C.textLight, fontFamily:"sans-serif" }}>
             <div style={{ fontSize:32, marginBottom:12 }}>🧶</div>
