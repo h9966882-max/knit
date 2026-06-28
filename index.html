@@ -7,7 +7,7 @@
 <link rel="manifest" href="./manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="🧶 Knitting Journal">
+<meta name="apple-mobile-web-app-title" content="編み物">
 <link rel="apple-touch-icon" href="./icon-192.png">
 <meta name="theme-color" content="#2D4A3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -50,17 +50,50 @@ const initProject = () => {
   };
 };
 
-const STORE_KEY = "knitting_v2";
-const loadData = () => {
+// ── Supabase ──────────────────────────────────────────────────────────────────
+
+const SUPABASE_URL = "https://cvlqufhuwiswretosfuj.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2bHF1Zmh1d2lzd3JldG9zZnVqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA2NzAzMzMsImV4cCI6MjA2NjI0NjMzM30.ag0coPnNA2O5trTp-rckUWkqfwJMNZHH_4E-29IEZf0";
+const TABLE = "knitting_data";
+const ROW_ID = "default";
+
+const sbFetch = (method, body) => fetch(
+  `${SUPABASE_URL}/rest/v1/${TABLE}?id=eq.${ROW_ID}`,
+  {
+    method,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": method === "POST" ? "resolution=merge-duplicates" : "return=minimal",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  }
+);
+
+const loadFromSupabase = async () => {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return JSON.parse(raw);
+    const res = await sbFetch("GET");
+    const rows = await res.json();
+    if (rows && rows.length > 0 && rows[0].data && Object.keys(rows[0].data).length > 0) {
+      return rows[0].data;
+    }
   } catch {}
   return null;
 };
-const saveData = (projects, activeProjectId) => {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ projects, activeProjectId })); } catch {}
+
+const saveToSupabase = async (projects, activeProjectId) => {
+  try {
+    await sbFetch("POST", { id: ROW_ID, data: { projects, activeProjectId }, updated_at: new Date().toISOString() });
+  } catch {}
 };
+
+// ローカルストレージ（移行用）
+const LOCAL_KEY = "knitting_v2";
+const loadLocal = () => {
+  try { const r = localStorage.getItem(LOCAL_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
+};
+const clearLocal = () => { try { localStorage.removeItem(LOCAL_KEY); } catch {} };
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -101,32 +134,54 @@ const ProgressBar = ({ pct }) => (
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 function App() {
-  const [projects, setProjects] = useState(() => {
-    const d = loadData();
-    if (d && d.projects && d.projects.length > 0) return d.projects;
-    const p = initProject(); return [p];
-  });
-  const [activeProjectId, setActiveProjectId] = useState(() => {
-    const d = loadData();
-    if (d && d.activeProjectId) return d.activeProjectId;
-    const d2 = loadData(); // re-read after init
-    return null;
-  });
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectId] = useState(null);
   const [view, setView] = useState("counter");
   const [editProjectDraft, setEditProjectDraft] = useState(null);
   const [editSectionDraft, setEditSectionDraft] = useState(null);
   const [tapFeedback, setTapFeedback] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("loading"); // loading | ok | error
 
-  // Init activeProjectId if null
+  // 起動時: Supabaseから読み込み、なければローカルから移行
   useEffect(() => {
-    if (!activeProjectId && projects.length > 0) {
-      setActiveProjectId(projects[0].id);
-    }
+    (async () => {
+      let data = await loadFromSupabase();
+      if (data && data.projects && data.projects.length > 0) {
+        setProjects(data.projects);
+        setActiveProjectId(data.activeProjectId || data.projects[0].id);
+        clearLocal();
+        setSyncStatus("ok");
+      } else {
+        // ローカルデータがあれば移行
+        const local = loadLocal();
+        if (local && local.projects && local.projects.length > 0) {
+          setProjects(local.projects);
+          setActiveProjectId(local.activeProjectId || local.projects[0].id);
+          await saveToSupabase(local.projects, local.activeProjectId);
+          clearLocal();
+        } else {
+          const p = initProject();
+          setProjects([p]);
+          setActiveProjectId(p.id);
+        }
+        setSyncStatus("ok");
+      }
+    })();
   }, []);
 
-  // Persist on change
+  // データ変更時にSupabaseへ保存
+  const saveRef = React.useRef(null);
   useEffect(() => {
-    if (projects.length > 0) saveData(projects, activeProjectId);
+    if (projects.length === 0 || syncStatus === "loading") return;
+    if (saveRef.current) clearTimeout(saveRef.current);
+    saveRef.current = setTimeout(async () => {
+      try {
+        await saveToSupabase(projects, activeProjectId);
+        setSyncStatus("ok");
+      } catch {
+        setSyncStatus("error");
+      }
+    }, 800); // 800ms デバウンス
   }, [projects, activeProjectId]);
 
   const activeProject = projects.find(p => p.id === activeProjectId);
@@ -233,7 +288,12 @@ function App() {
 
       {/* Header */}
       <header style={{ background:C.green, padding:"12px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100 }}>
-        <div style={{ color:"#F5EEDD", fontSize:18, fontWeight:"bold", letterSpacing:"0.03em" }}>🧶 Knitting Journal</div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div style={{ color:"#F5EEDD", fontSize:18, fontWeight:"bold", letterSpacing:"0.03em" }}>🧶 Knitting Journal</div>
+          <div style={{ fontSize:10, fontFamily:"sans-serif", color: syncStatus==="ok" ? "#a8d5b5" : syncStatus==="error" ? "#f4a4a4" : "#ccccaa" }}>
+            {syncStatus==="loading" ? "読込中…" : syncStatus==="ok" ? "✓" : "⚠ 同期エラー"}
+          </div>
+        </div>
         <nav style={{ display:"flex", gap:8 }}>
           {[["counter","カウンター"],["projects","プロジェクト"]].map(([v,label]) => (
             <button key={v} onClick={() => setView(v)} style={{
@@ -249,6 +309,13 @@ function App() {
       </header>
 
       <main style={{ maxWidth:480, margin:"0 auto", padding:"16px 14px 60px" }}>
+        {syncStatus === "loading" && (
+          <div style={{ textAlign:"center", padding:"60px 0", color:C.textLight, fontFamily:"sans-serif" }}>
+            <div style={{ fontSize:32, marginBottom:12 }}>🧶</div>
+            <div>データを読み込み中…</div>
+          </div>
+        )}
+        {syncStatus !== "loading" && (<>
 
         {/* ── COUNTER ── */}
         {view === "counter" && activeProject && (<>
@@ -480,6 +547,7 @@ function App() {
             </div>
           </div>
         )}
+        </>)}
 
       </main>
     </div>
