@@ -141,6 +141,45 @@ const deleteChart = async (url) => {
   );
 };
 
+// annotation（書き込み）をStorageに保存してURLを返す
+const uploadAnnotation = async (projectId, chartIdx, base64DataUrl) => {
+  const path = `${projectId}/annotation_${chartIdx}_${Date.now()}.png`;
+  // base64 → Blob変換
+  const res = await fetch(base64DataUrl);
+  const blob = await res.blob();
+  const uploadRes = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`,
+    {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "image/png",
+      },
+      body: blob,
+    }
+  );
+  if (!uploadRes.ok) throw new Error("Annotation upload failed");
+  return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
+};
+
+// 古いannotation URLを削除
+const deleteAnnotation = async (url) => {
+  if (!url || url.startsWith("data:")) return; // base64はスキップ
+  const path = url.split(`/object/public/${BUCKET}/`)[1];
+  if (!path || !path.includes("annotation_")) return;
+  await fetch(
+    `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`,
+    {
+      method: "DELETE",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+      },
+    }
+  ).catch(() => {});
+};
+
 // ── Chart Viewer Component ────────────────────────────────────────────────────
 
 function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCount }) {
@@ -236,13 +275,27 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
 
   const saveAnnotation = () => {
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
+    saveTimer.current = setTimeout(async () => {
       const dc = drawCanvasRef.current;
       if (!dc) return;
-      const annotation = dc.toDataURL("image/png");
-      const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation } : c);
-      onChartsChange(updated);
-    }, 600);
+      const base64 = dc.toDataURL("image/png");
+      try {
+        // 古いannotationがStorageにあれば削除
+        const oldAnnotation = charts[activeIdx]?.annotation;
+        if (oldAnnotation && !oldAnnotation.startsWith("data:")) {
+          deleteAnnotation(oldAnnotation);
+        }
+        // Storageにアップロード
+        const annotationUrl = await uploadAnnotation(projectId, activeIdx, base64);
+        const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation: annotationUrl } : c);
+        onChartsChange(updated);
+      } catch(e) {
+        // Storageへの保存に失敗したらbase64でフォールバック
+        console.warn("Annotation storage failed, using base64:", e);
+        const updated = charts.map((c, i) => i === activeIdx ? { ...c, annotation: base64 } : c);
+        onChartsChange(updated);
+      }
+    }, 800);
   };
 
   const doDraw = (pos) => {
@@ -636,8 +689,23 @@ function App() {
     (async () => {
       let data = await loadFromSupabase();
       if (data && data.projects && data.projects.length > 0) {
-        setProjects(data.projects);
-        setActiveProjectId(data.activeProjectId || data.projects[0].id);
+        // base64 annotationをStorageに移行
+        let needsSave = false;
+        const migratedProjects = await Promise.all(data.projects.map(async (p) => {
+          if (!p.charts) return p;
+          const migratedCharts = await Promise.all(p.charts.map(async (c, i) => {
+            if (!c.annotation || !c.annotation.startsWith("data:")) return c;
+            try {
+              const url = await uploadAnnotation(p.id, i, c.annotation);
+              needsSave = true;
+              return { ...c, annotation: url };
+            } catch { return c; }
+          }));
+          return { ...p, charts: migratedCharts };
+        }));
+        setProjects(migratedProjects);
+        setActiveProjectId(data.activeProjectId || migratedProjects[0].id);
+        if (needsSave) await saveToSupabase(migratedProjects, data.activeProjectId);
         clearLocal();
         setSyncStatus("ok");
       } else {
