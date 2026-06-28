@@ -84,7 +84,7 @@ const loadFromSupabase = async () => {
 
 const saveToSupabase = async (projects, activeProjectId) => {
   try {
-    await sbFetch("POST", { id: ROW_ID, data: { projects, activeProjectId }, updated_at: new Date().toISOString() });
+    await sbFetch("PATCH", { data: { projects, activeProjectId }, updated_at: new Date().toISOString() });
   } catch {}
 };
 
