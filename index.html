@@ -111,7 +111,7 @@ const markCodeUsed = async (codeId, userId, token) => {
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
 const newSection = (name = "新しい工程") => ({
-  id: Date.now() + Math.random(),
+  id: `sec_${Date.now()}_${Math.floor(Math.random()*10000)}`,
   name,
   rows: 0,
   targetRows: "",
@@ -122,7 +122,7 @@ const newSection = (name = "新しい工程") => ({
 const initProject = () => {
   const s = newSection("工程 1");
   return {
-    id: Date.now() + Math.random(),
+    id: `proj_${Date.now()}_${Math.floor(Math.random()*10000)}`,
     name: "新しいプロジェクト",
     type: "棒針",
     memo: "",
