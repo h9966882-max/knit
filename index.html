@@ -38,6 +38,59 @@ const getHeaders = (token) => ({
   "Content-Type": "application/json",
 });
 
+// ── Local Backup ─────────────────────────────────────────────────────────────
+
+const BACKUP_KEY_PREFIX = "kj_backup_";
+
+// annotationを除いたプロジェクトデータを保存
+const saveLocalBackup = (userId, projects, activeProjectId) => {
+  try {
+    const stripped = projects.map(p => ({
+      ...p,
+      charts: (p.charts || []).map(c => ({ ...c, annotation: null }))
+    }));
+    const backup = { projects: stripped, activeProjectId, savedAt: new Date().toISOString() };
+    localStorage.setItem(BACKUP_KEY_PREFIX + userId, JSON.stringify(backup));
+  } catch(e) { console.warn("Local backup failed:", e); }
+};
+
+const loadLocalBackup = (userId) => {
+  try {
+    const s = localStorage.getItem(BACKUP_KEY_PREFIX + userId);
+    return s ? JSON.parse(s) : null;
+  } catch { return null; }
+};
+
+const exportBackupJSON = (userId, projects, activeProjectId) => {
+  const stripped = projects.map(p => ({
+    ...p,
+    charts: (p.charts || []).map(c => ({ ...c, annotation: null }))
+  }));
+  const backup = { projects: stripped, activeProjectId, exportedAt: new Date().toISOString(), version: 1 };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `knitting-backup-${new Date().toLocaleDateString("ja-JP").replace(/\//g,"-")}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const importBackupJSON = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        if (!data.projects) throw new Error("無効なバックアップファイルです");
+        resolve(data);
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = () => reject(new Error("ファイルの読み込みに失敗しました"));
+    reader.readAsText(file);
+  });
+};
+
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
 const authSignUp = async (email, password) => {
@@ -892,6 +945,7 @@ function App() {
   const [tapFeedback, setTapFeedback] = useState(false);
   const [syncStatus, setSyncStatus] = useState("loading");
   const [showCharts, setShowCharts] = useState(false);
+  const importRef = useRef(null);
 
   // 起動時：セッション復元
   useEffect(() => {
@@ -925,12 +979,23 @@ function App() {
       if (data && data.projects && data.projects.length > 0) {
         setProjects(data.projects);
         setActiveProjectId(data.activeProjectId || data.projects[0].id);
+        setSyncStatus("ok");
       } else {
-        const p = initProject();
-        setProjects([p]);
-        setActiveProjectId(p.id);
+        // Supabaseにデータがない場合、ローカルバックアップから復元を試みる
+        const backup = loadLocalBackup(session.user.id);
+        if (backup && backup.projects && backup.projects.length > 0) {
+          setProjects(backup.projects);
+          setActiveProjectId(backup.activeProjectId || backup.projects[0].id);
+          setSyncStatus("ok");
+          // バックアップをSupabaseにも再保存
+          await saveToSupabase(session.access_token, session.user.id, backup.projects, backup.activeProjectId);
+        } else {
+          const p = initProject();
+          setProjects([p]);
+          setActiveProjectId(p.id);
+          setSyncStatus("ok");
+        }
       }
-      setSyncStatus("ok");
     })();
   }, [session?.user?.id]);
 
@@ -942,6 +1007,7 @@ function App() {
     saveRef.current = setTimeout(async () => {
       try {
         await saveToSupabase(session.access_token, session.user.id, projects, activeProjectId);
+        saveLocalBackup(session.user.id, projects, activeProjectId);
         setSyncStatus("ok");
       } catch {
         setSyncStatus("error");
@@ -1212,6 +1278,36 @@ function App() {
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
               <h2 style={{ fontSize:20, color:C.green }}>プロジェクト</h2>
               <button onClick={addProject} style={{ background:C.green, color:"#F5EEDD", border:"none", borderRadius:8, padding:"8px 16px", fontSize:14, cursor:"pointer", fontFamily:"sans-serif" }}>＋ 新規</button>
+            </div>
+
+            {/* バックアップ */}
+            <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"12px 14px", marginBottom:16 }}>
+              <div style={{ fontSize:12, color:C.gold, fontFamily:"sans-serif", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10 }}>バックアップ</div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={() => exportBackupJSON(session.user.id, projects, activeProjectId)} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"9px 0", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>
+                  ⬇ エクスポート
+                </button>
+                <button onClick={() => importRef.current?.click()} style={{ flex:1, background:C.bg, border:`1px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:"9px 0", fontSize:13, cursor:"pointer", fontFamily:"sans-serif" }}>
+                  ⬆ インポート
+                </button>
+                <input ref={importRef} type="file" accept="application/json" style={{ display:"none" }} onChange={async (e) => {
+                  const file = e.target.files[0];
+                  if (!file) return;
+                  if (!window.confirm("現在のデータをバックアップファイルで上書きしますか？")) return;
+                  try {
+                    const data = await importBackupJSON(file);
+                    setProjects(data.projects);
+                    setActiveProjectId(data.activeProjectId || data.projects[0].id);
+                    await saveToSupabase(session.access_token, session.user.id, data.projects, data.activeProjectId);
+                    saveLocalBackup(session.user.id, data.projects, data.activeProjectId);
+                    alert("インポート完了！");
+                  } catch(err) { alert("インポートに失敗しました: " + err.message); }
+                  e.target.value = "";
+                }} />
+              </div>
+              <div style={{ fontSize:11, color:C.textLight, fontFamily:"sans-serif", marginTop:8 }}>
+                ※ 編み図の書き込みはバックアップに含まれません
+              </div>
             </div>
             {projects.map(p => {
               const total = projectTotalRows(p);
