@@ -915,8 +915,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
                 {pdfConverting ? "変換中…少し待ってね⏳" : "📝 画像に変換して書き込む"}
               </button>
               <div style={{ color:"rgba(245,238,221,0.4)", fontFamily:"sans-serif", fontSize:11, textAlign:"center", lineHeight:1.6 }}>
-                変換するとPDFが画像になり書き込めるようになります{"
-"}※変換後は元のPDFには戻りません
+                変換するとPDFが画像になり書き込めるようになります。※変換後は元のPDFには戻りません
               </div>
               <iframe src={activeChart.url} style={{ width:"100%", flex:1, border:"none", borderRadius:8, marginTop:8 }} />
             </div>
