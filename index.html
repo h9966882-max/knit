@@ -780,8 +780,86 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
   };
 
   const isPdf = activeChart?.url?.toLowerCase().includes(".pdf");
+  const [pdfConverting, setPdfConverting] = useState(false);
   const COLORS = ["#C4837A","#2D4A3E","#B8924A","#4488ff","#000000","#ffffff"];
   const markerHeightPx = [3, 6, 12, 20, 30][markerHeight - 1];
+
+  // PDFを画像に変換してcanvasに描画
+  const convertPdfToImage = async () => {
+    setPdfConverting(true);
+    try {
+      // PDF.jsをCDNから動的ロード
+      if (!window.pdfjsLib) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      }
+
+      const loadingTask = window.pdfjsLib.getDocument(activeChart.url);
+      const pdf = await loadingTask.promise;
+      const numPages = pdf.numPages;
+
+      // 全ページを縦に並べてcanvasに描画
+      const scale = 2.0; // 高解像度
+      const pageCanvases = [];
+      let totalHeight = 0;
+      let maxWidth = 0;
+
+      for (let i = 1; i <= numPages; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale });
+        const c = document.createElement("canvas");
+        c.width = viewport.width;
+        c.height = viewport.height;
+        await page.render({ canvasContext: c.getContext("2d"), viewport }).promise;
+        pageCanvases.push(c);
+        totalHeight += viewport.height;
+        maxWidth = Math.max(maxWidth, viewport.width);
+      }
+
+      // 全ページを1枚のcanvasに合成
+      const combined = document.createElement("canvas");
+      combined.width = maxWidth;
+      combined.height = totalHeight;
+      const ctx = combined.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, combined.width, combined.height);
+      let y = 0;
+      for (const pc of pageCanvases) {
+        ctx.drawImage(pc, 0, y);
+        y += pc.height;
+      }
+
+      // base64に変換してアップロード
+      const base64 = combined.toDataURL("image/png");
+      const updatedCharts = charts.map((c, i) =>
+        i === activeIdx ? { ...c, url: base64, name: (c.name || "編み図").replace(".pdf", ".png"), annotation: null } : c
+      );
+      onChartsChange(updatedCharts);
+
+      // bgCanvasに描画
+      const bg = bgCanvasRef.current;
+      const dc = drawCanvasRef.current;
+      if (bg && dc) {
+        bg.width = combined.width;
+        bg.height = combined.height;
+        bg.getContext("2d").drawImage(combined, 0, 0);
+        dc.width = combined.width;
+        dc.height = combined.height;
+      }
+      setScale(1); setOffset({ x: 0, y: 0 });
+    } catch(e) {
+      alert("PDF変換に失敗しました。スクショして画像として追加してみてください。");
+      console.error(e);
+    }
+    setPdfConverting(false);
+  };
 
   return (
     <div style={{ position:"fixed", inset:0, background:"#1a1a1a", zIndex:200, display:"flex", flexDirection:"column" }}>
@@ -825,7 +903,23 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
               <button onClick={() => fileInputRef.current?.click()} style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:8, padding:"10px 20px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif", marginTop:8 }}>＋ 追加</button>
             </div>
           ) : isPdf ? (
-            <iframe src={activeChart.url} style={{ width:"100%", height:"100%", border:"none" }} />
+            <div style={{ width:"100%", height:"100%", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", background:"#111", gap:16, padding:24 }}>
+              <div style={{ color:"rgba(245,238,221,0.7)", fontFamily:"sans-serif", fontSize:14, textAlign:"center" }}>
+                PDFは書き込みができません
+              </div>
+              <button
+                onClick={convertPdfToImage}
+                disabled={pdfConverting}
+                style={{ background:"#B8924A", border:"none", color:"#2D4A3E", borderRadius:10, padding:"14px 28px", fontSize:15, fontWeight:"bold", cursor: pdfConverting ? "not-allowed" : "pointer", fontFamily:"sans-serif", opacity: pdfConverting ? 0.7 : 1 }}
+              >
+                {pdfConverting ? "変換中…少し待ってね⏳" : "📝 画像に変換して書き込む"}
+              </button>
+              <div style={{ color:"rgba(245,238,221,0.4)", fontFamily:"sans-serif", fontSize:11, textAlign:"center", lineHeight:1.6 }}>
+                変換するとPDFが画像になり書き込めるようになります{"
+"}※変換後は元のPDFには戻りません
+              </div>
+              <iframe src={activeChart.url} style={{ width:"100%", flex:1, border:"none", borderRadius:8, marginTop:8 }} />
+            </div>
           ) : (
             <div style={{ transform:`translate(${offset.x}px,${offset.y}px) scale(${scale})`, transformOrigin:"center center", width:"100%", height:"100%", display:"flex", alignItems:"flex-start", justifyContent:"center" }}>
               <div style={{ position:"relative", display:"inline-block" }}>
