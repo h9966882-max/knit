@@ -545,7 +545,7 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     };
     img.onerror = () => { console.error("画像読み込み失敗:", activeChart.url); };
     img.src = activeChart.url;
-  }, [activeIdx, activeChart?.url]);
+  }, [activeIdx]); // URLが変わってもactiveIdxが変わらなければcanvasはリセットしない
 
   const getCanvasPos = (clientX, clientY) => {
     const dc = drawCanvasRef.current;
@@ -917,7 +917,9 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
               <div style={{ color:"rgba(245,238,221,0.4)", fontFamily:"sans-serif", fontSize:11, textAlign:"center", lineHeight:1.6 }}>
                 文字が消える場合は、画像ファイルで追加してね
               </div>
-              <iframe src={activeChart.url} style={{ width:"100%", flex:1, border:"none", borderRadius:8, marginTop:8 }} />
+              <div style={{ width:"100%", flex:1, marginTop:8, borderRadius:8, overflow:"auto", WebkitOverflowScrolling:"touch", position:"relative" }}>
+                <iframe src={activeChart.url} style={{ width:"100%", height:"100%", minHeight:400, border:"none", borderRadius:8 }} />
+              </div>
             </div>
           ) : (
             <div style={{ transform:`translate(${offset.x}px,${offset.y}px) scale(${scale})`, transformOrigin:"center center", width:"100%", height:"100%", display:"flex", alignItems:"flex-start", justifyContent:"center" }}>
@@ -1040,13 +1042,32 @@ function App() {
   const [showCharts, setShowCharts] = useState(false);
   const importRef = useRef(null);
 
+  // セッションをrefでも持つ（非同期処理内で最新値を参照するため）
+  const sessionRef = useRef(null);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+
+  // トークン自動更新（20分ごと）
+  useEffect(() => {
+    if (!session) return;
+    const interval = setInterval(async () => {
+      try {
+        const refreshed = await authRefresh(session.refresh_token);
+        if (refreshed.access_token) {
+          const newSession = { access_token: refreshed.access_token, refresh_token: refreshed.refresh_token, user: refreshed.user };
+          saveSession(newSession);
+          setSession(newSession);
+        }
+      } catch(e) { console.warn("Token refresh failed:", e); }
+    }, 20 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [session?.refresh_token]);
+
   // 起動時：セッション復元
   useEffect(() => {
     (async () => {
       const saved = loadSession();
       if (!saved) { setAuthLoading(false); return; }
 
-      // トークンの有効期限確認（expiry があれば）
       try {
         const refreshed = await authRefresh(saved.refresh_token);
         if (refreshed.access_token) {
@@ -1057,7 +1078,8 @@ function App() {
           clearSession();
         }
       } catch {
-        clearSession();
+        // リフレッシュ失敗時は保存済みセッションをそのまま使う
+        setSession(saved);
       }
       setAuthLoading(false);
     })();
