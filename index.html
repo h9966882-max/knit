@@ -629,6 +629,10 @@ function ChartViewer({ charts, projectId, onClose, onChartsChange, section, onCo
     if (!vp) return;
 
     const handleTouchStart = (e) => {
+      // カウンターバーやツールバー上のタッチは描画しない
+      const target = e.target;
+      if (target.closest && target.closest('button')) return;
+
       if (e.touches.length === 2) {
         const t0 = e.touches[0], t1 = e.touches[1];
         pinch.current = { startDist: Math.hypot(t1.clientX-t0.clientX, t1.clientY-t0.clientY), startScale: scaleRef.current };
