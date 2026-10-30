@@ -188,17 +188,16 @@ const initProject = () => {
 // ── Supabase data ─────────────────────────────────────────────────────────────
 
 const loadFromSupabase = async (token, userId) => {
-  try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/knitting_data?user_id=eq.${userId}&select=data`,
-      { headers: getHeaders(token) }
-    );
-    const rows = await res.json();
-    if (rows && rows.length > 0 && rows[0].data && rows[0].data.projects) {
-      return rows[0].data;
-    }
-  } catch(e) { console.error("load error:", e); }
-  return null;
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/knitting_data?user_id=eq.${userId}&select=data`,
+    { headers: getHeaders(token) }
+  );
+  if (!res.ok) throw new Error("load failed " + res.status);
+  const rows = await res.json();
+  if (rows && rows.length > 0 && rows[0].data && rows[0].data.projects) {
+    return rows[0].data;
+  }
+  return null; // 通信は成功したがデータが無い（本当の新規ユーザー）
 };
 
 const saveToSupabase = async (token, userId, projects, activeProjectId) => {
@@ -207,6 +206,7 @@ const saveToSupabase = async (token, userId, projects, activeProjectId) => {
     `${SUPABASE_URL}/rest/v1/knitting_data?user_id=eq.${userId}&select=id`,
     { headers: getHeaders(token) }
   );
+  if (!checkRes.ok) throw new Error("save check failed " + checkRes.status);
   const existing = await checkRes.json();
 
   const payload = {
@@ -224,7 +224,8 @@ const saveToSupabase = async (token, userId, projects, activeProjectId) => {
         body: JSON.stringify(payload),
       }
     );
-    return res.ok;
+    if (!res.ok) throw new Error("save failed " + res.status);
+    return true;
   } else {
     // 新規INSERT
     const res = await fetch(
@@ -235,7 +236,8 @@ const saveToSupabase = async (token, userId, projects, activeProjectId) => {
         body: JSON.stringify({ ...payload, user_id: userId }),
       }
     );
-    return res.ok;
+    if (!res.ok) throw new Error("save failed " + res.status);
+    return true;
   }
 };
 
@@ -1050,21 +1052,82 @@ function App() {
   const sessionRef = useRef(null);
   useEffect(() => { sessionRef.current = session; }, [session]);
 
-  // トークン自動更新（20分ごと）
+  // JWTの期限が近いか（残り2分未満）
+  const tokenExpiresSoon = (token) => {
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      return payload.exp * 1000 - Date.now() < 120000;
+    } catch { return true; }
+  };
+
+  const forceLogout = () => {
+    clearSession();
+    sessionRef.current = null;
+    setSession(null);
+    setProjects([]);
+    setSyncStatus("loading");
+  };
+
+  // トークン更新（同時に2回走らないよう1本化。refresh tokenは使い捨てのため）
+  const refreshingRef = useRef(null);
+  const refreshSession = () => {
+    if (refreshingRef.current) return refreshingRef.current;
+    const p = (async () => {
+      const cur = sessionRef.current;
+      if (!cur) return "none";
+      try {
+        const r = await authRefresh(cur.refresh_token);
+        if (r.access_token) {
+          const ns = { access_token: r.access_token, refresh_token: r.refresh_token, user: r.user || cur.user };
+          saveSession(ns);
+          sessionRef.current = ns;
+          setSession(ns);
+          return "ok";
+        }
+        return "expired"; // refresh tokenが無効 → 再ログインが必要
+      } catch {
+        return "offline"; // 通信失敗。ログイン情報は残して後で再試行
+      }
+    })();
+    refreshingRef.current = p;
+    p.finally(() => { refreshingRef.current = null; });
+    return p;
+  };
+
+  // 使う直前に「有効なセッション」を返す（必要なら更新）
+  const getValidSession = async () => {
+    const cur = sessionRef.current;
+    if (!cur) return null;
+    if (!tokenExpiresSoon(cur.access_token)) return cur;
+    const result = await refreshSession();
+    if (result === "expired") { forceLogout(); return null; }
+    return sessionRef.current;
+  };
+
+  const [saveTick, setSaveTick] = useState(0);   // 保存の再試行用
+  const [loadTick, setLoadTick] = useState(0);   // 読み込みの再試行用
+  const syncStatusRef = useRef("loading");
+  useEffect(() => { syncStatusRef.current = syncStatus; }, [syncStatus]);
+
+  // 定期チェック＋アプリに戻ってきた時＋通信が戻った時にトークンを確認
   useEffect(() => {
     if (!session) return;
-    const interval = setInterval(async () => {
-      try {
-        const refreshed = await authRefresh(session.refresh_token);
-        if (refreshed.access_token) {
-          const newSession = { access_token: refreshed.access_token, refresh_token: refreshed.refresh_token, user: refreshed.user };
-          saveSession(newSession);
-          setSession(newSession);
-        }
-      } catch(e) { console.warn("Token refresh failed:", e); }
-    }, 20 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [session?.refresh_token]);
+    const check = async () => {
+      await getValidSession();
+      if (syncStatusRef.current === "error") setSaveTick(t => t + 1);
+    };
+    const interval = setInterval(check, 5 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", check);
+    window.addEventListener("focus", check);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", check);
+      window.removeEventListener("focus", check);
+    };
+  }, [!!session]);
 
   // 起動時：セッション復元
   useEffect(() => {
@@ -1077,12 +1140,14 @@ function App() {
         if (refreshed.access_token) {
           const newSession = { access_token: refreshed.access_token, refresh_token: refreshed.refresh_token, user: refreshed.user };
           saveSession(newSession);
+          sessionRef.current = newSession;
           setSession(newSession);
         } else {
           clearSession();
         }
       } catch {
-        // リフレッシュ失敗時は保存済みセッションをそのまま使う
+        // 通信失敗時は保存済みセッションを使い、あとで更新を再試行
+        sessionRef.current = saved;
         setSession(saved);
       }
       setAuthLoading(false);
@@ -1094,53 +1159,74 @@ function App() {
     if (!session) return;
     (async () => {
       setSyncStatus("loading");
-      let data = await loadFromSupabase(session.access_token, session.user.id);
-      if (data && data.projects && data.projects.length > 0) {
-        setProjects(data.projects);
-        setActiveProjectId(data.activeProjectId || data.projects[0].id);
-        setSyncStatus("ok");
-      } else {
-        // Supabaseにデータがない場合、ローカルバックアップから復元を試みる
-        const backup = loadLocalBackup(session.user.id);
-        if (backup && backup.projects && backup.projects.length > 0) {
-          setProjects(backup.projects);
-          setActiveProjectId(backup.activeProjectId || backup.projects[0].id);
+      try {
+        const sess = await getValidSession();
+        if (!sess) return;
+        const data = await loadFromSupabase(sess.access_token, sess.user.id);
+        if (data && data.projects && data.projects.length > 0) {
+          setProjects(data.projects);
+          setActiveProjectId(data.activeProjectId || data.projects[0].id);
           setSyncStatus("ok");
-          // バックアップをSupabaseにも再保存
-          await saveToSupabase(session.access_token, session.user.id, backup.projects, backup.activeProjectId);
         } else {
-          const p = initProject();
-          setProjects([p]);
-          setActiveProjectId(p.id);
-          setSyncStatus("ok");
+          // 通信は成功したがデータが無い場合のみ、ローカルバックアップから復元
+          const backup = loadLocalBackup(sess.user.id);
+          if (backup && backup.projects && backup.projects.length > 0) {
+            setProjects(backup.projects);
+            setActiveProjectId(backup.activeProjectId || backup.projects[0].id);
+            setSyncStatus("ok");
+            try { await saveToSupabase(sess.access_token, sess.user.id, backup.projects, backup.activeProjectId); } catch {}
+          } else {
+            const p = initProject();
+            setProjects([p]);
+            setActiveProjectId(p.id);
+            setSyncStatus("ok");
+          }
         }
+      } catch (e) {
+        // 読み込み失敗時は空データで上書きしないよう、何も表示せず再試行を促す
+        console.error("load error:", e);
+        setSyncStatus("loaderror");
       }
     })();
-  }, [session?.user?.id]);
+  }, [session?.user?.id, loadTick]);
 
   // データ変更時にSupabaseへ保存
   const saveRef = useRef(null);
   useEffect(() => {
-    if (!session || projects.length === 0 || syncStatus === "loading") return;
+    if (!session || projects.length === 0 || syncStatus === "loading" || syncStatus === "loaderror") return;
+    // 端末側のバックアップは通信の成否に関係なく先に保存
+    saveLocalBackup(session.user.id, projects, activeProjectId);
     if (saveRef.current) clearTimeout(saveRef.current);
     saveRef.current = setTimeout(async () => {
       try {
-        await saveToSupabase(session.access_token, session.user.id, projects, activeProjectId);
-        saveLocalBackup(session.user.id, projects, activeProjectId);
+        const sess = await getValidSession();
+        if (!sess) return;
+        try {
+          await saveToSupabase(sess.access_token, sess.user.id, projects, activeProjectId);
+        } catch (e) {
+          // 認証切れの可能性があるのでトークンを更新して1回だけ再試行
+          const r = await refreshSession();
+          if (r === "expired") { forceLogout(); return; }
+          const sess2 = sessionRef.current;
+          await saveToSupabase(sess2.access_token, sess2.user.id, projects, activeProjectId);
+        }
         setSyncStatus("ok");
       } catch {
         setSyncStatus("error");
       }
     }, 800);
-  }, [projects, activeProjectId]);
+  }, [projects, activeProjectId, saveTick]);
 
-  const handleSignOut = async () => {
-    if (!window.confirm("ログアウトしますか？")) return;
-    await authSignOut(session.access_token);
-    clearSession();
-    setSession(null);
-    setProjects([]);
-    setSyncStatus("loading");
+  const handleSignOut = () => {
+    const msg = syncStatus === "error"
+      ? "同期エラー中です。最新の変更が保存されていない可能性があります。それでもログアウトしますか？"
+      : "ログアウトしますか？";
+    if (!window.confirm(msg)) return;
+    const token = sessionRef.current?.access_token;
+    // 端末側のログイン情報を先に確実に消す（サーバー通知の失敗に巻き込まれない）
+    forceLogout();
+    // サーバーへの通知はベストエフォート
+    try { authSignOut(token).catch(() => {}); } catch {}
   };
 
   // 起動中
@@ -1267,8 +1353,10 @@ function App() {
       <header style={{ background:C.green, padding:"12px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <div style={{ color:"#F5EEDD", fontSize:18, fontWeight:"bold", letterSpacing:"0.03em" }}>🧶 Knitting Journal</div>
-          <div style={{ fontSize:10, fontFamily:"sans-serif", color: syncStatus==="ok" ? "#a8d5b5" : syncStatus==="error" ? "#f4a4a4" : "#ccccaa" }}>
-            {syncStatus==="loading" ? "読込中…" : syncStatus==="ok" ? "✓" : "⚠ 同期エラー"}
+          <div
+            onClick={() => { if (syncStatus === "error") setSaveTick(t => t + 1); else if (syncStatus === "loaderror") setLoadTick(t => t + 1); }}
+            style={{ fontSize:10, fontFamily:"sans-serif", cursor: (syncStatus==="error"||syncStatus==="loaderror") ? "pointer" : "default", color: syncStatus==="ok" ? "#a8d5b5" : (syncStatus==="error"||syncStatus==="loaderror") ? "#f4a4a4" : "#ccccaa" }}>
+            {syncStatus==="loading" ? "読込中…" : syncStatus==="ok" ? "✓" : "⚠ 同期エラー↻"}
           </div>
         </div>
         <nav style={{ display:"flex", gap:6, alignItems:"center" }}>
@@ -1298,7 +1386,15 @@ function App() {
           </div>
         )}
 
-        {syncStatus !== "loading" && (<>
+        {syncStatus === "loaderror" && (
+          <div style={{ textAlign:"center", padding:"48px 16px", color:C.textMid, fontFamily:"sans-serif" }}>
+            <div style={{ fontSize:32, marginBottom:12 }}>🧶</div>
+            <div style={{ fontSize:15, marginBottom:6, color:C.green, fontWeight:"bold" }}>データを読み込めませんでした</div>
+            <div style={{ fontSize:12, color:C.textLight, marginBottom:20, lineHeight:1.7 }}>通信状況を確認して、もう一度お試しください。<br/>データは消えていないので安心してください。</div>
+            <button onClick={() => setLoadTick(t => t + 1)} style={{ background:C.green, color:"#F5EEDD", border:"none", borderRadius:10, padding:"12px 28px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>再読み込み</button>
+          </div>
+        )}
+        {syncStatus !== "loading" && syncStatus !== "loaderror" && (<>
 
         {/* ── COUNTER ── */}
         {view === "counter" && activeProject && (<>
