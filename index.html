@@ -1104,6 +1104,7 @@ function App() {
     return sessionRef.current;
   };
 
+  const [loadErrorMsg, setLoadErrorMsg] = useState("");
   const [saveTick, setSaveTick] = useState(0);   // 保存の再試行用
   const [loadTick, setLoadTick] = useState(0);   // 読み込みの再試行用
   const syncStatusRef = useRef("loading");
@@ -1160,9 +1161,24 @@ function App() {
     (async () => {
       setSyncStatus("loading");
       try {
-        const sess = await getValidSession();
-        if (!sess) return;
-        const data = await loadFromSupabase(sess.access_token, sess.user.id);
+        let data = null;
+        let sess = null;
+        let lastErr = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            sess = await getValidSession();
+            if (!sess) return; // 再ログインが必要な場合
+            data = await loadFromSupabase(sess.access_token, sess.user.id);
+            lastErr = null;
+            break;
+          } catch (e) {
+            lastErr = e;
+            // 起動直後の通信不安定に備えて少し待って再試行。認証エラーならトークンを更新
+            await new Promise(r => setTimeout(r, 1500));
+            if (String(e.message).includes("401")) await refreshSession();
+          }
+        }
+        if (lastErr) throw lastErr;
         if (data && data.projects && data.projects.length > 0) {
           setProjects(data.projects);
           setActiveProjectId(data.activeProjectId || data.projects[0].id);
@@ -1185,6 +1201,7 @@ function App() {
       } catch (e) {
         // 読み込み失敗時は空データで上書きしないよう、何も表示せず再試行を促す
         console.error("load error:", e);
+        setLoadErrorMsg(String((e && e.message) || e));
         setSyncStatus("loaderror");
       }
     })();
@@ -1391,6 +1408,7 @@ function App() {
             <div style={{ fontSize:32, marginBottom:12 }}>🧶</div>
             <div style={{ fontSize:15, marginBottom:6, color:C.green, fontWeight:"bold" }}>データを読み込めませんでした</div>
             <div style={{ fontSize:12, color:C.textLight, marginBottom:20, lineHeight:1.7 }}>通信状況を確認して、もう一度お試しください。<br/>データは消えていないので安心してください。</div>
+            {loadErrorMsg && <div style={{ fontSize:10, color:C.textLight, marginBottom:16, opacity:0.7 }}>詳細: {loadErrorMsg}</div>}
             <button onClick={() => setLoadTick(t => t + 1)} style={{ background:C.green, color:"#F5EEDD", border:"none", borderRadius:10, padding:"12px 28px", fontSize:15, fontWeight:"bold", cursor:"pointer", fontFamily:"sans-serif" }}>再読み込み</button>
           </div>
         )}
